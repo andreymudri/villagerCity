@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import dev.andreymudri.villagercity.citizen.JobType;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
@@ -71,5 +72,29 @@ class VillageDataTest {
         assertEquals(VillageAge.DARK, village.age());
         assertTrue(village.managed());
         assertEquals(null, village.storehousePos());
+    }
+
+    @Test
+    void citizenRosterTracksJobsByVillager() {
+        VillageData village = new VillageData(UUID.randomUUID(), BlockPos.ZERO, 16);
+        UUID lumberjack = UUID.randomUUID();
+        UUID builder = UUID.randomUUID();
+        UUID second = UUID.randomUUID();
+        village.setCitizen(lumberjack, JobType.LUMBERJACK);
+        village.setCitizen(builder, JobType.BUILDER);
+        village.setCitizen(second, JobType.LUMBERJACK);
+        assertEquals(2, village.jobCount(JobType.LUMBERJACK));
+        assertEquals(1, village.jobCount(JobType.BUILDER));
+        assertEquals(3, village.citizens().size());
+
+        village.setCitizen(second, JobType.NONE);
+        assertFalse(village.citizens().containsKey(second));
+        assertEquals(1, village.jobCount(JobType.LUMBERJACK));
+        assertEquals(0, village.jobCount(JobType.NONE));
+
+        assertTrue(village.removeCitizen(builder));
+        assertFalse(village.removeCitizen(builder));
+        assertEquals(0, village.jobCount(JobType.BUILDER));
+        assertEquals(JobType.LUMBERJACK, village.citizens().get(lumberjack));
     }
 }

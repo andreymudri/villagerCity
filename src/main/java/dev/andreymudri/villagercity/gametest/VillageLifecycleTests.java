@@ -5,12 +5,17 @@ import dev.andreymudri.villagercity.citizen.CitizenAttachments;
 import dev.andreymudri.villagercity.citizen.CitizenData;
 import dev.andreymudri.villagercity.citizen.JobType;
 import dev.andreymudri.villagercity.storehouse.StorehouseContent;
+import dev.andreymudri.villagercity.village.VillageCodecs;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageTicker;
 import java.util.List;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.Tag;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.npc.VillagerProfession;
 import net.minecraft.world.item.Items;
@@ -97,6 +102,71 @@ public final class VillageLifecycleTests {
         VillageTicker.tickVillage(helper.getLevel(), village);
         helper.assertTrue(countJob(List.of(replacement), JobType.LUMBERJACK) == 1, "lumberjack not replaced");
         VillageTestSupport.remove(helper, village);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_life_away")
+    public static void doesNotDuplicateJobWhenWorkerIsAwayFromBell(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        List<Villager> villagers = List.of(
+                GameTestSupport.spawnVillager(helper, 20, 1, 20),
+                GameTestSupport.spawnVillager(helper, 28, 1, 20),
+                GameTestSupport.spawnVillager(helper, 20, 1, 28));
+        VillageTicker.tickVillage(helper.getLevel(), village);
+        Villager lumberjack = villagers.stream()
+                .filter(v -> countJob(List.of(v), JobType.LUMBERJACK) == 1)
+                .findFirst().orElse(null);
+        if (lumberjack == null) {
+            VillageTestSupport.remove(helper, village);
+            helper.fail("no lumberjack after the first tick");
+            return;
+        }
+        BlockPos away = helper.absolutePos(new BlockPos(44, 1, 24));
+        lumberjack.moveTo(away.getX() + 0.5, away.getY(), away.getZ() + 0.5);
+        VillageTicker.tickVillage(helper.getLevel(), village);
+        long lumberjacks = countJob(villagers, JobType.LUMBERJACK);
+        long builders = countJob(villagers, JobType.BUILDER);
+        VillageTestSupport.remove(helper, village);
+        helper.assertTrue(lumberjacks == 1, "lumberjacks " + lumberjacks);
+        helper.assertTrue(builders == 1, "builders " + builders);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_life_killed", timeoutTicks = 200)
+    public static void forgetsKilledCitizen(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager a = GameTestSupport.spawnVillager(helper, 20, 1, 20);
+        Villager b = GameTestSupport.spawnVillager(helper, 28, 1, 20);
+        VillageTicker.tickVillage(helper.getLevel(), village);
+        Villager lumberjack = countJob(List.of(a), JobType.LUMBERJACK) == 1 ? a : b;
+        lumberjack.kill();
+        Villager replacement = GameTestSupport.spawnVillager(helper, 20, 1, 28);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(lumberjack.isRemoved(), "killed lumberjack not removed yet");
+            VillageTicker.tickVillage(helper.getLevel(), village);
+            boolean replaced = countJob(List.of(replacement), JobType.LUMBERJACK) == 1;
+            VillageTestSupport.remove(helper, village);
+            if (!replaced) {
+                helper.fail("lumberjack not replaced after the killed one was removed");
+            }
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_life_roster_codec")
+    public static void rosterSurvivesCodecRoundTrip(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 8);
+        village.setCitizen(UUID.randomUUID(), JobType.LUMBERJACK);
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        Tag encoded = VillageCodecs.VILLAGE.encodeStart(NbtOps.INSTANCE, village).getOrThrow();
+        VillageData decoded = VillageCodecs.VILLAGE.parse(NbtOps.INSTANCE, encoded).getOrThrow();
+        helper.assertTrue(decoded.citizens().equals(village.citizens()), "roster " + decoded.citizens() + " != " + village.citizens());
+        CompoundTag oldSave = ((CompoundTag) encoded).copy();
+        oldSave.remove("citizens");
+        VillageData legacy = VillageCodecs.VILLAGE.parse(NbtOps.INSTANCE, oldSave).getOrThrow();
+        helper.assertTrue(legacy.citizens().isEmpty(), "save without a roster decoded as " + legacy.citizens());
         helper.succeed();
     }
 }
