@@ -1,0 +1,17 @@
+{
+  "maxParallel": 2,
+  "lens": ["correctness", "security", "tests"],
+  "phases": {
+    "default": {
+      "fixRounds": 2,
+      "checks": [
+        { "name": "structures", "kind": "command", "run": "python3 tools/nbt_structures.py --check" },
+        { "name": "build", "kind": "command", "run": "mkdir -p $HOME/.cache/tmp-villagercity && JAVA_HOME=$HOME/.local/share/mise/installs/java/temurin-21.0.12+101.0.LTS TMPDIR=$HOME/.cache/tmp-villagercity ./gradlew --no-daemon -Dorg.gradle.workers.max=4 build" },
+        { "name": "gametest", "kind": "command", "run": "JAVA_HOME=$HOME/.local/share/mise/installs/java/temurin-21.0.12+101.0.LTS TMPDIR=$HOME/.cache/tmp-villagercity scripts/gametest.sh" },
+        { "name": "fileset", "kind": "fileset" },
+        { "name": "ownership", "kind": "ownership" },
+        { "name": "review", "kind": "agent", "agent": "tm-reviewer", "blockOn": ["high"] }
+      ]
+    }
+  }
+}
