@@ -20,6 +20,7 @@ import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.common.NeoForge;
@@ -36,6 +37,8 @@ public final class ProtectionTests {
     /** Absolute positions a protection mod would guard; the listeners below cancel block changes there. */
     private static final Set<BlockPos> PROTECTED_BREAK = ConcurrentHashMap.newKeySet();
     private static final Set<BlockPos> PROTECTED_PLACE = ConcurrentHashMap.newKeySet();
+    /** While set, every EntityPlaceEvent is cancelled; only set and cleared within one synchronous test body. */
+    private static volatile boolean cancelAllPlacements;
 
     static {
         NeoForge.EVENT_BUS.addListener((LivingDestroyBlockEvent e) -> {
@@ -44,7 +47,7 @@ public final class ProtectionTests {
             }
         });
         NeoForge.EVENT_BUS.addListener((BlockEvent.EntityPlaceEvent e) -> {
-            if (PROTECTED_PLACE.contains(e.getPos())) {
+            if (cancelAllPlacements || PROTECTED_PLACE.contains(e.getPos())) {
                 e.setCanceled(true);
             }
         });
@@ -188,6 +191,81 @@ public final class ProtectionTests {
             VillageTestSupport.remove(helper, village);
         }
         helper.assertTrue(placed == null, "storehouse placed with mobGriefing off at " + placed);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_protect_place_griefing")
+    public static void placeBlockRespectsMobGriefing(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        BlockPos target = new BlockPos(12, 1, 10);
+        Villager villager = GameTestSupport.spawnVillager(helper, 10, 1, 10);
+        villager.getInventory().addItem(new ItemStack(Items.COBBLESTONE, 1));
+        boolean previous = mobGriefing(helper);
+        setMobGriefing(helper, false);
+        ScriptedJob job = new ScriptedJob(new PlaceBlock(helper.absolutePos(target), Blocks.COBBLESTONE.defaultBlockState(), Items.COBBLESTONE));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        helper.succeedWhen(() -> {
+            helper.assertFalse(job.results.isEmpty(), "task still running");
+            setMobGriefing(helper, previous);
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(job.results.equals(List.of(Task.Status.FAILED)), "results " + job.results);
+            helper.assertBlockPresent(Blocks.AIR, target);
+            int carried = Inventories.count(villager.getInventory(), s -> s.is(Items.COBBLESTONE));
+            helper.assertTrue(carried == 1, "cobblestone carried " + carried);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_protect_storehouse_event")
+    public static void storehouseRespectsCancelledPlaceEvent(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, VILLAGE_BELL, 8, false);
+        BlockPos placed;
+        cancelAllPlacements = true;
+        try {
+            VillageTicker.tickVillage(helper.getLevel(), village);
+            placed = village.storehousePos();
+        } finally {
+            cancelAllPlacements = false;
+            VillageTestSupport.remove(helper, village);
+        }
+        helper.assertTrue(placed == null, "storehouse recorded at " + placed + " although placement was cancelled");
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                for (int y = 1; y <= 3; y++) {
+                    helper.assertBlockNotPresent(StorehouseContent.BLOCK.get(), new BlockPos(x, y, z));
+                }
+            }
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_protect_storehouse_grass")
+    public static void storehouseIsPlacedOverShortGrass(GameTestHelper helper) {
+        storehouseIsPlacedOverCover(helper, Blocks.SHORT_GRASS);
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_protect_storehouse_snow")
+    public static void storehouseIsPlacedOverSnowLayer(GameTestHelper helper) {
+        storehouseIsPlacedOverCover(helper, Blocks.SNOW);
+    }
+
+    /** Covers every y=1 cell except the bell with a replaceable block; the village must still get a storehouse. */
+    private static void storehouseIsPlacedOverCover(GameTestHelper helper, Block cover) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, VILLAGE_BELL, 2, false);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if (x != VILLAGE_BELL.getX() || z != VILLAGE_BELL.getZ()) {
+                    helper.setBlock(x, 1, z, cover);
+                }
+            }
+        }
+        VillageTicker.tickVillage(helper.getLevel(), village);
+        BlockPos placed = village.storehousePos();
+        VillageTestSupport.remove(helper, village);
+        helper.assertTrue(placed != null, "no storehouse placed over " + cover);
+        helper.assertTrue(helper.getLevel().getBlockState(placed).is(StorehouseContent.BLOCK.get()), "storehouse block missing at " + placed);
         helper.succeed();
     }
 }

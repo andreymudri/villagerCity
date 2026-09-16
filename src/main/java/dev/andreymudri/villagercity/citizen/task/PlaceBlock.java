@@ -21,8 +21,8 @@ import net.neoforged.neoforge.common.util.BlockSnapshot;
 
 /**
  * Places one block state, consuming its cost item from the villager's inventory. Fails when
- * {@link WorldPermissions#mayGrief} refuses (not covered by a test), and undoes the placement, refunding the
- * cost, when EntityPlaceEvent is cancelled (ProtectionTests).
+ * {@link WorldPermissions#mayGrief} refuses, and undoes the placement, refunding the cost, when
+ * EntityPlaceEvent is cancelled (both covered by ProtectionTests).
  */
 public final class PlaceBlock implements Task {
     public static final double REACH = 5.0;

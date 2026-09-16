@@ -7,6 +7,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 
 public final class StorehouseService {
@@ -16,9 +17,9 @@ public final class StorehouseService {
     }
 
     /**
-     * Places a storehouse at the first buildable air spot near the bell when the village has none, or when its
-     * block is gone. Does nothing with doMobGriefing off; restores the previous block when EntityPlaceEvent is
-     * cancelled (that path is not covered by a test).
+     * Places a storehouse at the first buildable spot near the bell whose block is air or replaceable (short grass,
+     * snow layers), when the village has none or its block is gone. Does nothing with doMobGriefing off, and records
+     * no position when EntityPlaceEvent is cancelled (ProtectionTests).
      */
     public static void ensureStorehouse(ServerLevel level, VillageData village) {
         BlockPos pos = village.storehousePos();
@@ -31,7 +32,10 @@ public final class StorehouseService {
         if (!WorldPermissions.mayGrief(level, null)) {
             return;
         }
-        PlotPlanner.find(level, village, SIZE, spot -> level.getBlockState(spot).isAir()).ifPresent(spot -> {
+        PlotPlanner.find(level, village, SIZE, spot -> {
+            BlockState existing = level.getBlockState(spot);
+            return existing.isAir() || existing.canBeReplaced();
+        }).ifPresent(spot -> {
             BlockSnapshot snapshot = WorldPermissions.snapshot(level, spot);
             level.setBlock(spot, StorehouseContent.BLOCK.get().defaultBlockState(), Block.UPDATE_ALL);
             if (WorldPermissions.placementCancelled(null, snapshot)) {
