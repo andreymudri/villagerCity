@@ -71,7 +71,7 @@ public final class VillageRegistryTests {
         GameTestSupport.prepareArea(helper);
         VillageTestSupport.removeVillagesNear(helper, BELL);
         BlockPos bellAbs = helper.absolutePos(BELL);
-        helper.getLevel().getEntitiesOfClass(Villager.class, new AABB(bellAbs).inflate(32)).forEach(Villager::discard);
+        helper.getLevel().getEntitiesOfClass(Villager.class, new AABB(bellAbs).inflate(VillageDetector.VILLAGER_RADIUS)).forEach(Villager::discard);
         helper.setBlock(BELL, Blocks.BELL);
         helper.runAfterDelay(5, () -> {
             helper.assertTrue(VillageDetector.scan(helper.getLevel(), helper.absolutePos(BELL), 16).isEmpty(), "registered a bell with no villagers");

@@ -48,9 +48,13 @@ public final class TaskSchedulerTests {
         helper.getLevel().addFreshEntity(new ItemEntity(helper.getLevel(), bait.getX() + 0.5, bait.getY(), bait.getZ() + 0.5, new ItemStack(Items.BREAD)));
         CountingTask task = new CountingTask();
         CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, ItemStack.EMPTY, new ScriptedJob(task));
-        // the nearby bread makes vanilla's GoToWantedItem core behaviour want to set WALK_TARGET; the sensor that
-        // notices it fires on a randomized 0-19 tick delay, and TaskScheduler runs after brain.tick() each game
-        // tick, so a single snapshot can miss a target that was set and cleared between two checks. Latch it instead.
+        // the nearby bread makes vanilla's GoToWantedItem core behaviour want to set WALK_TARGET. A per-tick latch
+        // does not help it survive TaskScheduler's own erase: that runs in the same entity tick as the set, so a
+        // check made after the entity's tick (as onEachTick's callback is) never observes it with the fix in place.
+        // The latch matters because with the erase removed the target is never cleared by TaskScheduler at all, so
+        // it stays set from whenever the sensor first notices the bread until the villager physically reaches it;
+        // checking on every tick catches that window reliably, where a single check at a fixed tick can land after
+        // the villager has already reached and consumed the bread (vanilla clears WALK_TARGET once reached).
         AtomicBoolean sawWalkTarget = new AtomicBoolean();
         helper.onEachTick(() -> {
             if (villager.getBrain().hasMemoryValue(MemoryModuleType.WALK_TARGET)) {
