@@ -6,12 +6,14 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.phys.AABB;
 
-/** Walks to and collects matching item entities near a point until none are left or 200 ticks pass. */
+/** Walks to and collects matching item entities near a point until none are left or the task has run 200 ticks. */
 public final class PickUpItems implements Task {
     public static final int TIMEOUT_TICKS = 200;
     public static final double GRAB_DISTANCE = 1.5;
@@ -19,8 +21,8 @@ public final class PickUpItems implements Task {
     private final BlockPos around;
     private final double radius;
     private final Predicate<ItemStack> filter;
-    private long deadline;
-    private long lastPathTick;
+    private int ticksRun;
+    private int lastPathTick;
 
     public PickUpItems(BlockPos around, double radius, Predicate<ItemStack> filter) {
         this.around = around.immutable();
@@ -30,14 +32,14 @@ public final class PickUpItems implements Task {
 
     @Override
     public void start(TaskContext ctx) {
-        deadline = ctx.gameTime() + TIMEOUT_TICKS;
-        lastPathTick = ctx.gameTime() - MoveTo.REPATH_TICKS;
+        ticksRun = 0;
+        lastPathTick = -MoveTo.REPATH_TICKS;
     }
 
     @Override
     public Status tick(TaskContext ctx) {
-        long now = ctx.gameTime();
-        if (now > deadline) {
+        ticksRun++;
+        if (ticksRun > TIMEOUT_TICKS) {
             return Status.SUCCESS;
         }
         Villager villager = ctx.villager();
@@ -59,9 +61,15 @@ public final class PickUpItems implements Task {
             }
             return Status.RUNNING;
         }
-        if (villager.getNavigation().isDone() || now - lastPathTick >= MoveTo.REPATH_TICKS) {
-            villager.getNavigation().moveTo(nearest, MoveTo.SPEED);
-            lastPathTick = now;
+        BlockPos itemBlock = nearest.blockPosition();
+        PathNavigation navigation = villager.getNavigation();
+        boolean ours = itemBlock.equals(navigation.getTargetPos());
+        if (navigation.isDone() || !ours || ticksRun - lastPathTick >= MoveTo.REPATH_TICKS) {
+            Path path = navigation.createPath(itemBlock, 0);
+            if (path != null) {
+                navigation.moveTo(path, MoveTo.SPEED);
+            }
+            lastPathTick = ticksRun;
         }
         return Status.RUNNING;
     }
