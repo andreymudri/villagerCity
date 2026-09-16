@@ -2,6 +2,7 @@ package dev.andreymudri.villagercity.citizen.task;
 
 import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
+import dev.andreymudri.villagercity.citizen.WorldPermissions;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
@@ -11,7 +12,11 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
-/** Breaks one block with the held tool at player-like speed, dropping its loot and wearing the tool. */
+/**
+ * Breaks one block with the held tool at player-like speed, dropping its loot and wearing the tool.
+ * Fails without progress when {@link WorldPermissions#mayBreak} refuses (ProtectionTests covers doMobGriefing
+ * off and a cancelled LivingDestroyBlockEvent).
+ */
 public final class BreakBlock implements Task {
     public static final double REACH = 6.0;
 
@@ -43,6 +48,9 @@ public final class BreakBlock implements Task {
             expected = current;
             progress = 0;
             required = breakTicks(level, pos, current, villager.getMainHandItem());
+        }
+        if (!WorldPermissions.mayBreak(level, villager, pos)) {
+            return Status.FAILED;
         }
         if (required < 0 || villager.distanceToSqr(Vec3.atCenterOf(pos)) > REACH * REACH) {
             return Status.FAILED;

@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.server.level.ServerLevel;
@@ -27,6 +28,11 @@ public final class PlotPlanner {
 
     /** Returns the origin (minimum corner, at the first free y above ground) of a buildable plot. */
     public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size) {
+        return find(level, village, size, pos -> true);
+    }
+
+    /** As {@link #find(ServerLevel, VillageData, Vec3i)}, skipping buildable plots whose origin fails the predicate. */
+    public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size, Predicate<BlockPos> originAllowed) {
         BlockPos center = village.center();
         int reach = village.radius() + SEARCH_MARGIN;
         List<Footprint> occupied = village.occupiedFootprints();
@@ -53,7 +59,10 @@ public final class PlotPlanner {
                 }
             }
             if (PlotRules.isBuildable(columns)) {
-                return Optional.of(new BlockPos(minX, PlotRules.buildY(columns), minZ));
+                BlockPos origin = new BlockPos(minX, PlotRules.buildY(columns), minZ);
+                if (originAllowed.test(origin)) {
+                    return Optional.of(origin);
+                }
             }
         }
         return Optional.empty();
