@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -15,6 +16,7 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
@@ -22,7 +24,9 @@ import net.neoforged.neoforge.common.util.BlockSnapshot;
 /**
  * Places one block state, consuming its cost item from the villager's inventory. Fails when
  * {@link WorldPermissions#mayGrief} refuses, and undoes the placement, refunding the cost, when
- * EntityPlaceEvent is cancelled (both covered by ProtectionTests).
+ * EntityPlaceEvent is cancelled (both covered by ProtectionTests). While a living entity occupies the cell it
+ * paths every idle occupant out of it, including another citizen (ProtectionTests), and fails after
+ * {@link #BLOCKED_TIMEOUT_TICKS}.
  */
 public final class PlaceBlock implements Task {
     public static final double REACH = 5.0;
@@ -59,9 +63,14 @@ public final class PlaceBlock implements Task {
             return Status.FAILED;
         }
         if (state.blocksMotion() && !level.getEntitiesOfClass(LivingEntity.class, new AABB(pos)).isEmpty()) {
-            if (villager.getBoundingBox().intersects(new AABB(pos))) {
-                double side = villager.getX() < pos.getX() + 0.5 ? -2.0 : 2.0;
-                villager.getNavigation().moveTo(pos.getX() + 0.5 + side, pos.getY(), pos.getZ() + 0.5, MoveTo.SPEED);
+            for (LivingEntity occupant : level.getEntitiesOfClass(LivingEntity.class, new AABB(pos))) {
+                if (occupant instanceof Mob mob && mob.getNavigation().isDone()) {
+                    double side = mob.getX() < pos.getX() + 0.5 ? -2.0 : 2.0;
+                    Path path = mob.getNavigation().createPath(BlockPos.containing(pos.getX() + 0.5 + side, pos.getY(), pos.getZ() + 0.5), 0);
+                    if (path != null) {
+                        mob.getNavigation().moveTo(path, MoveTo.SPEED);
+                    }
+                }
             }
             return ++blocked > BLOCKED_TIMEOUT_TICKS ? Status.FAILED : Status.RUNNING;
         }

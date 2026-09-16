@@ -125,6 +125,27 @@ public final class ProtectionTests {
         });
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_protect_place_idle_occupant", timeoutTicks = 400)
+    public static void placeBlockMovesAnIdleCitizenOutOfTheCell(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        BlockPos target = new BlockPos(12, 1, 10);
+        Villager idler = GameTestSupport.spawnVillager(helper, 12, 1, 10);
+        ScriptedJob idle = new ScriptedJob(ctx -> Task.Status.RUNNING);
+        CitizenTestSupport.enroll(idler, village, JobType.LUMBERJACK, ItemStack.EMPTY, idle);
+        Villager placer = GameTestSupport.spawnVillager(helper, 10, 1, 10);
+        placer.getInventory().addItem(new ItemStack(Items.COBBLESTONE, 1));
+        ScriptedJob job = new ScriptedJob(new PlaceBlock(helper.absolutePos(target), Blocks.COBBLESTONE.defaultBlockState(), Items.COBBLESTONE));
+        CitizenTestSupport.enroll(placer, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        helper.succeedWhen(() -> {
+            helper.assertFalse(job.results.isEmpty(), "task still running");
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(idle.results.isEmpty(), "idle task finished: " + idle.results);
+            helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results);
+            helper.assertBlockPresent(Blocks.COBBLESTONE, target);
+        });
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_protect_storehouse_rails")
     public static void storehouseIsNotPlacedOverPlayerBlocks(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
