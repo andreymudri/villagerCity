@@ -9,7 +9,10 @@ public interface Task {
 
     Status tick(TaskContext ctx);
 
-    /** Called once when the task ends for any reason other than being paused. */
+    /**
+     * Called once when the task ends for any reason other than being paused.
+     * {@code ctx.village()} is null when the task is stopped because the citizen's village no longer exists.
+     */
     default void stop(TaskContext ctx) {
     }
 }
