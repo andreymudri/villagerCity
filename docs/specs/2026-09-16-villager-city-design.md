@@ -1,7 +1,7 @@
 # Villager City — Design
 
 Date: 2026-09-16
-Status: vision agreed; slice 1 ready for planning
+Status: vision agreed; slice 1 planned (`docs/plans/2026-09-16-slice1-village-builds-a-house.md`)
 
 ## 1. Vision
 
@@ -127,7 +127,8 @@ In a fresh world, with no player input beyond standing nearby, a vanilla village
 - Job assignment in slice 1: the first two adult villagers with vanilla profession `none`
   (nitwits and employed villagers excluded) become lumberjack, then builder.
 - The registry runs a **village tick** every 100 game ticks per village: job assignment,
-  storehouse checks, and builder plot decisions happen there.
+  storehouse checks, and storehouse placement happen there. Builders claim plots in their own
+  job planning.
 
 **`TaskScheduler`**
 - Each tick for an employed citizen: if vanilla priority activities are active (`PANIC`, `REST`,
@@ -137,7 +138,7 @@ In a fresh world, with no player input beyond standing nearby, a vanilla village
   activity with no behaviours is re-added and forced every tick, and `WALK_TARGET` is erased.
   While it is active, vanilla WORK/IDLE/MEET/PLAY behaviours cannot start; CORE triggers (panic,
   raid, bell) still take over on their own.
-- `Task` interface: `start(ctx)`, `tick(ctx) → RUNNING | SUCCESS | FAILED`, `save()`, `load()`.
+- `Task` interface: `start(ctx)`, `tick(ctx) → RUNNING | SUCCESS | FAILED`, `stop(ctx)`.
 - Primitive tasks: `MoveTo`, `BreakBlock`, `PlaceBlock`, `PickUpItems`, `Deposit`, `Withdraw`.
 - A job produces a sequence of primitive tasks. A `FAILED` task makes the job re-plan from scratch.
 - A `MoveTo` that makes no progress for 200 ticks (10 s) fails.
