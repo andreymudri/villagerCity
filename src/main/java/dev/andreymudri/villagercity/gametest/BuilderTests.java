@@ -98,12 +98,14 @@ public final class BuilderTests {
         BlockPos origin = new BlockPos(8, 1, 8);
         UUID plotId = UUID.randomUUID();
         village.addPlot(new Plot(plotId, blueprint.id().toString(), helper.absolutePos(origin), blueprint.size(), villager.getUUID()));
-        // second placement in build order is the wall plank at offset (1,1,0)
+        // the bedrock plank at (1,1,0) is placement 26; placements 0-24 are the floor, 25 is the log at (0,1,0)
         helper.setBlock(origin.offset(1, 1, 0), Blocks.BEDROCK);
         CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
         helper.succeedWhen(() -> {
             helper.assertTrue(village.plots().stream().noneMatch(p -> p.id().equals(plotId)), "plot not abandoned");
             helper.assertBlockPresent(Blocks.COBBLESTONE, origin);
+            helper.assertBlockPresent(Blocks.COBBLESTONE, origin.offset(4, 0, 4));
+            helper.assertBlockPresent(Blocks.OAK_LOG, origin.offset(0, 1, 0));
             helper.assertBlockPresent(Blocks.BEDROCK, origin.offset(1, 1, 0));
             VillageTestSupport.remove(helper, village);
         });
