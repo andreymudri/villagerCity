@@ -1,8 +1,11 @@
 package dev.andreymudri.villagercity.village;
 
+import dev.andreymudri.villagercity.citizen.JobType;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import javax.annotation.Nullable;
@@ -26,14 +29,16 @@ public final class VillageData {
     private final List<BuildingRecord> houses;
     private final List<Plot> plots;
     private final ContributionLedger ledger;
+    private final Map<UUID, JobType> citizens;
     private boolean managed;
 
     public VillageData(UUID id, BlockPos center, int radius) {
-        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), true);
+        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), true);
     }
 
     public VillageData(UUID id, BlockPos center, int radius, VillageAge age, @Nullable BlockPos storehousePos,
-                       List<BuildingRecord> houses, List<Plot> plots, ContributionLedger ledger, boolean managed) {
+                       List<BuildingRecord> houses, List<Plot> plots, ContributionLedger ledger, Map<UUID, JobType> citizens,
+                       boolean managed) {
         this.id = id;
         this.center = center.immutable();
         this.radius = radius;
@@ -42,6 +47,7 @@ public final class VillageData {
         this.houses = new ArrayList<>(houses);
         this.plots = new ArrayList<>(plots);
         this.ledger = ledger;
+        this.citizens = new LinkedHashMap<>(citizens);
         this.managed = managed;
     }
 
@@ -75,6 +81,27 @@ public final class VillageData {
 
     public ContributionLedger ledger() {
         return ledger;
+    }
+
+    /** Employed citizens by villager UUID. Survives unloads; entries leave only when the villager is destroyed or dismissed. */
+    public Map<UUID, JobType> citizens() {
+        return Collections.unmodifiableMap(citizens);
+    }
+
+    public void setCitizen(UUID villager, JobType job) {
+        if (job == JobType.NONE) {
+            citizens.remove(villager);
+        } else {
+            citizens.put(villager, job);
+        }
+    }
+
+    public boolean removeCitizen(UUID villager) {
+        return citizens.remove(villager) != null;
+    }
+
+    public int jobCount(JobType job) {
+        return (int) citizens.values().stream().filter(job::equals).count();
     }
 
     /** When false, the village ticker leaves this village alone (used by focused GameTests). */

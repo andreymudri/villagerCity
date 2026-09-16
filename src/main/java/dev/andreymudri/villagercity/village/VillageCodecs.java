@@ -2,6 +2,8 @@ package dev.andreymudri.villagercity.village;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
+import dev.andreymudri.villagercity.citizen.JobType;
+import java.util.Map;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.core.Vec3i;
@@ -37,9 +39,10 @@ public final class VillageCodecs {
             BUILDING.listOf().fieldOf("houses").forGetter(VillageData::houses),
             PLOT.listOf().fieldOf("plots").forGetter(VillageData::plots),
             LEDGER.fieldOf("ledger").forGetter(VillageData::ledger),
+            Codec.unboundedMap(UUIDUtil.STRING_CODEC, JobType.CODEC).optionalFieldOf("citizens", Map.of()).forGetter(VillageData::citizens),
             Codec.BOOL.optionalFieldOf("managed", true).forGetter(VillageData::managed)
-    ).apply(i, (id, center, radius, age, storehouse, houses, plots, ledger, managed) ->
-            new VillageData(id, center, radius, age, storehouse.orElse(null), houses, plots, ledger, managed)));
+    ).apply(i, (id, center, radius, age, storehouse, houses, plots, ledger, citizens, managed) ->
+            new VillageData(id, center, radius, age, storehouse.orElse(null), houses, plots, ledger, citizens, managed)));
 
     private VillageCodecs() {
     }
