@@ -5096,3 +5096,156 @@ public final class EndToEndTests {
 - [ ] **Step 2:** Run `./gradlew --no-daemon -Dorg.gradle.workers.max=4 build` and `scripts/gametest.sh` — both pass.
 
 - [ ] **Step 3:** Commit: `test: end-to-end village growth and build resume after reload`
+
+### Task 15: movement reliability — path accuracy and pause-safe timers
+
+Found while running Task 14: `villagebuildshousefromgatheredwood` fails about half the time. `MoveTo` asks the
+pathfinder for accuracy `floor(reach)`, which counts a Manhattan distance of `reach` as arrived, while
+`MoveTo` measures Euclidean distance to the block center (with a +0.5 in y). With reach 4.0 a target 4 blocks
+away is "reached" for the pathfinder (1-node path) but 4.03+ away for `MoveTo`, so the builder never moves and
+re-claims the same plot forever. `PickUpItems` has the same flaw through `navigation.moveTo(entity)` (accuracy
+1 against a 1.5 grab distance), which makes the lumberjack leave logs on the ground. Both tasks also time out
+on absolute game time, so ticks spent paused by the scheduler (night, panic, trading) count against them.
+
+**Files:**
+- Modify: `src/main/java/dev/andreymudri/villagercity/citizen/task/MoveTo.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/citizen/task/PickUpItems.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/job/LumberjackJob.java`
+- Create: `src/main/java/dev/andreymudri/villagercity/gametest/MovementTests.java`
+
+**Depends:** T12
+
+**Model:** capable
+
+- [ ] **Step 1:** Write `src/main/java/dev/andreymudri/villagercity/gametest/MovementTests.java`. Each test must fail on the current code for the stated reason before Step 2; record the failing output.
+
+```java
+package dev.andreymudri.villagercity.gametest;
+
+import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.citizen.Inventories;
+import dev.andreymudri.villagercity.citizen.JobType;
+import dev.andreymudri.villagercity.citizen.Task;
+import dev.andreymudri.villagercity.citizen.task.MoveTo;
+import dev.andreymudri.villagercity.citizen.task.PickUpItems;
+import dev.andreymudri.villagercity.village.VillageData;
+import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.gametest.framework.GameTest;
+import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.tags.ItemTags;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.gametest.GameTestHolder;
+import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
+
+@GameTestHolder(VillagerCity.MODID)
+@PrefixGameTestTemplate(false)
+public final class MovementTests {
+    private static final BlockPos BELL = new BlockPos(2, 1, 2);
+
+    /** Before the fix: accuracy floor(4.0)=4 treats the start as arrived, the villager never moves, FAILED after 200 ticks. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_reach_edge", timeoutTicks = 400)
+    public static void moveToArrivesWhenTargetIsExactlyReachBlocksAway(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = GameTestSupport.spawnVillager(helper, 10, 1, 10);
+        BlockPos target = helper.absolutePos(new BlockPos(14, 1, 10));
+        ScriptedJob job = new ScriptedJob(new MoveTo(target, 4.0));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results);
+            helper.assertTrue(villager.distanceToSqr(Vec3.atCenterOf(target)) <= 4.0 * 4.0, "not within reach");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** Before the fix: moveTo(entity) uses accuracy 1, the neighbouring block counts as arrived, the item stays 1.9 away. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_pickup_edge", timeoutTicks = 300)
+    public static void pickUpItemsReachesItemInNeighbouringBlock(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = GameTestSupport.spawnVillager(helper, 10, 1, 10);
+        Vec3 stand = helper.absoluteVec(new Vec3(10.5, 1, 10.05));
+        villager.moveTo(stand.x, stand.y, stand.z);
+        Vec3 itemAt = helper.absoluteVec(new Vec3(10.5, 1, 11.95));
+        helper.getLevel().addFreshEntity(new ItemEntity(helper.getLevel(), itemAt.x, itemAt.y, itemAt.z, new ItemStack(Items.OAK_LOG, 1)));
+        ScriptedJob job = new ScriptedJob(new PickUpItems(BlockPos.containing(itemAt), 3.0, s -> s.is(ItemTags.LOGS)));
+        CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, ItemStack.EMPTY, job);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results);
+            helper.assertTrue(Inventories.count(villager.getInventory(), s -> s.is(Items.OAK_LOG)) == 1, "log not picked up");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** Before the fix: the 300-tick REST pause exhausts the absolute 200-tick deadline and the task returns SUCCESS empty-handed. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_pickup_pause", timeoutTicks = 900)
+    public static void pickUpItemsSurvivesNightPause(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = GameTestSupport.spawnVillager(helper, 10, 1, 10);
+        BlockPos drop = helper.absolutePos(new BlockPos(30, 1, 10));
+        helper.getLevel().addFreshEntity(new ItemEntity(helper.getLevel(), drop.getX() + 0.5, drop.getY(), drop.getZ() + 0.5, new ItemStack(Items.OAK_LOG, 3)));
+        helper.runAtTickTime(1, () -> helper.getLevel().setDayTime(13000));
+        helper.runAtTickTime(320, () -> helper.getLevel().setDayTime(1000));
+        ScriptedJob job = new ScriptedJob(new PickUpItems(drop, 3.0, s -> s.is(ItemTags.LOGS)));
+        CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, ItemStack.EMPTY, job);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(helper.getTick() > 320, "still night");
+            helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results);
+            helper.assertTrue(Inventories.count(villager.getInventory(), s -> s.is(Items.OAK_LOG)) == 3, "logs carried " + Inventories.count(villager.getInventory(), s -> s.is(Items.OAK_LOG)));
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+}
+```
+
+If a test does not fail on the current code for its stated reason, adjust its setup (positions, pause length) until it does, and say what changed. Do not weaken an assertion to make it pass.
+
+- [ ] **Step 2:** In `MoveTo.java`, measure the stuck timeout in ticks the task actually ran, and request a path accuracy that guarantees the path end is within `reach`:
+
+```java
+    private int ticksRun;
+    private int bestTick;
+    private int lastPathTick;
+
+    /** Manhattan accuracy whose worst case (all of it vertical, plus the +0.5 to the block center) stays within reach. */
+    static int pathAccuracy(double reach) {
+        return Math.max(0, (int) Math.floor(reach - 1.0));
+    }
+
+    @Override
+    public void start(TaskContext ctx) {
+        bestDistanceSqr = Double.MAX_VALUE;
+        ticksRun = 0;
+        bestTick = 0;
+        lastPathTick = -REPATH_TICKS;
+    }
+```
+
+In `tick`, increment `ticksRun` first and use it everywhere `now` / `ctx.gameTime()` was used for `lastProgressTick` and `lastPathTick`; call `navigation.createPath(target, pathAccuracy(reach))`. Update the class Javadoc to say the 200 ticks count only ticks the task ran.
+
+- [ ] **Step 3:** In `PickUpItems.java`, replace the absolute `deadline` with a `ticksRun` counter compared against `TIMEOUT_TICKS`, and replace `villager.getNavigation().moveTo(nearest, MoveTo.SPEED)` with a path to the item's block at accuracy 0, re-pathing when the nearest item changes block:
+
+```java
+        BlockPos itemBlock = nearest.blockPosition();
+        PathNavigation navigation = villager.getNavigation();
+        boolean ours = itemBlock.equals(navigation.getTargetPos());
+        if (navigation.isDone() || !ours || ticksRun - lastPathTick >= MoveTo.REPATH_TICKS) {
+            Path path = navigation.createPath(itemBlock, 0);
+            if (path != null) {
+                navigation.moveTo(path, MoveTo.SPEED);
+            }
+            lastPathTick = ticksRun;
+        }
+```
+
+- [ ] **Step 4:** In `LumberjackJob.java`, remove the `MoveTo(found.base(), STUMP_REACH)` step and the `STUMP_REACH` constant with its Javadoc: with Step 3 it no longer does anything `PickUpItems` does not.
+
+- [ ] **Step 5:** Run `./gradlew --no-daemon -Dorg.gradle.workers.max=4 build`, then `scripts/gametest.sh` five times in a row. All five runs must report every required test passed, including `chopstreestoreslogsandreplants` and `pickupitemscollectsmatchingdrops`. Report the pass count of each run.
+
+- [ ] **Step 6:** Commit: `fix: path accuracy within reach and pause-safe timers for movement tasks`
