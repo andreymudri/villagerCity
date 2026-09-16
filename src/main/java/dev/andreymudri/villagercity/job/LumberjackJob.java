@@ -24,6 +24,12 @@ import net.minecraft.world.level.block.Blocks;
 public final class LumberjackJob implements Job {
     public static final int DEPOSIT_THRESHOLD = 16;
     public static final double DROP_RADIUS = 6.0;
+    /**
+     * Below 1 so MoveTo paths onto the stump block itself rather than stopping beside it. Drops from logs
+     * boxed in by leaves fall down the trunk shaft into the stump block; PickUpItems paths toward items
+     * with accuracy 1 and can stop more than its grab distance away from them.
+     */
+    public static final double STUMP_REACH = 0.9;
 
     static final Map<Block, Item> SAPLINGS = Map.of(
             Blocks.OAK_LOG, Items.OAK_SAPLING,
@@ -65,6 +71,7 @@ public final class LumberjackJob implements Job {
         return TaskSequence.of(
                 new MoveTo(found.base(), 2.5),
                 new ChopTree(found.logs()),
+                new MoveTo(found.base(), STUMP_REACH),
                 new PickUpItems(found.base(), DROP_RADIUS, LumberjackJob::isHaul),
                 new MoveTo(found.base(), 2.5),
                 new Replant(found.base(), SAPLINGS.getOrDefault(found.logBlock(), Items.AIR)));
