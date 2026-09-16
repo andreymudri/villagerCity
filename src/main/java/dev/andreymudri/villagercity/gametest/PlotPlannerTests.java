@@ -1,0 +1,87 @@
+package dev.andreymudri.villagercity.gametest;
+
+import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.village.BuildingRecord;
+import dev.andreymudri.villagercity.village.Footprint;
+import dev.andreymudri.villagercity.village.VillageData;
+import dev.andreymudri.villagercity.village.plot.PlotPlanner;
+import dev.andreymudri.villagercity.village.plot.PlotRules;
+import java.util.UUID;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Vec3i;
+import net.minecraft.gametest.framework.GameTest;
+import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.world.level.block.Blocks;
+import net.neoforged.neoforge.gametest.GameTestHolder;
+import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
+
+@GameTestHolder(VillagerCity.MODID)
+@PrefixGameTestTemplate(false)
+public final class PlotPlannerTests {
+    private static final Vec3i HOUSE = new Vec3i(5, 5, 5);
+
+    /**
+     * Test-relative position. Not {@code helper.relativePos}: in 1.21.1 it rotates by
+     * {@code rotation.getRotated(CLOCKWISE_180)}, which for an unrotated test mirrors x and z around
+     * the structure origin (a plot at relative 18,1,18 was reported as -18,1,-18).
+     */
+    private static BlockPos relative(GameTestHelper helper, BlockPos absolute) {
+        return absolute.subtract(helper.absolutePos(BlockPos.ZERO));
+    }
+
+    private static VillageData village(GameTestHelper helper) {
+        return new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(24, 1, 24)), 4);
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void findsFlatGroundNearCenter(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = village(helper);
+        BlockPos origin = PlotPlanner.find(helper.getLevel(), village, HOUSE).orElseThrow(() -> new AssertionError("no plot found"));
+        BlockPos relative = relative(helper, origin);
+        helper.assertTrue(relative.getY() == 1, "plot should sit on the grass floor, got y=" + relative.getY());
+        helper.assertTrue(relative.getX() >= 2 && relative.getX() <= 41 && relative.getZ() >= 2 && relative.getZ() <= 41,
+                "plot outside the search reach: " + relative);
+        helper.assertFalse(PlotRules.overlapsAny(Footprint.of(origin, HOUSE), village.occupiedFootprints()), "plot overlaps the bell");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void avoidsWater(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < 24; z++) {
+                helper.setBlock(x, 0, z, Blocks.WATER);
+            }
+        }
+        BlockPos origin = PlotPlanner.find(helper.getLevel(), village(helper), HOUSE).orElseThrow(() -> new AssertionError("no plot found"));
+        int relZ = relative(helper, origin).getZ();
+        helper.assertTrue(relZ >= 25, "plot margin touches water: z=" + relZ);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void avoidsExistingHouses(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = village(helper);
+        village.addHouse(new BuildingRecord("minecraft:home", helper.absolutePos(new BlockPos(22, 1, 22)), HOUSE));
+        village.setRadius(4);
+        BlockPos origin = PlotPlanner.find(helper.getLevel(), village, HOUSE).orElseThrow(() -> new AssertionError("no plot found"));
+        helper.assertFalse(PlotRules.overlapsAny(Footprint.of(origin, HOUSE), village.occupiedFootprints()), "plot overlaps the house");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void rejectsTreesAndBuildings(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if ((x + z) % 7 == 0) {
+                    helper.setBlock(x, 1, z, Blocks.OAK_LOG);
+                }
+            }
+        }
+        helper.assertTrue(PlotPlanner.find(helper.getLevel(), village(helper), HOUSE).isEmpty(), "plot found through logs");
+        helper.succeed();
+    }
+}
