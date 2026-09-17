@@ -22,12 +22,14 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.BiPredicate;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.level.block.BushBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -78,7 +80,8 @@ public final class SitePrep implements Job {
             return null;
         }
         if (cutCell != null) {
-            return TaskSequence.of(MoveTo.digOut(cutCell, BuilderJob.WORK_REACH), new BreakBlock(cutCell), new PickUpItems(cutCell, 2.0, FillMaterials::isFill));
+            return TaskSequence.of(MoveTo.digOut(cutCell, BuilderJob.WORK_REACH), new VerifiedBreak(cutCell, SitePrep::isCuttable),
+                    new PickUpItems(cutCell, 2.0, FillMaterials::isFill));
         }
 
         FillTarget fillTarget = findFillCandidate(level, area, floor);
@@ -89,7 +92,8 @@ public final class SitePrep implements Job {
         if (fillTarget != null) {
             BlockPos fillCell = fillTarget.pos();
             if (fillTarget.needsClearing()) {
-                return TaskSequence.of(MoveTo.digOut(fillCell, BuilderJob.WORK_REACH), new BreakBlock(fillCell));
+                return TaskSequence.of(MoveTo.digOut(fillCell, BuilderJob.WORK_REACH),
+                        new VerifiedBreak(fillCell, (lvl, pos) -> isClearableVegetation(lvl.getBlockState(pos))));
             }
             Optional<BlockState> fillState = FillMaterials.choose(inventory);
             if (fillState.isPresent()) {
@@ -162,17 +166,22 @@ public final class SitePrep implements Job {
             for (int x = area.minX(); x <= area.maxX(); x++) {
                 for (int z = area.minZ(); z <= area.maxZ(); z++) {
                     BlockPos pos = new BlockPos(x, y, z);
-                    BlockState state = level.getBlockState(pos);
-                    if (state.isAir()) {
-                        continue;
-                    }
-                    if (DigStep.isDiggable(level, pos) || (state.canBeReplaced() && state.getFluidState().isEmpty())) {
+                    if (isCuttable(level, pos)) {
                         return pos;
                     }
                 }
             }
         }
         return null;
+    }
+
+    /** Natural, diggable ground, or non-air replaceable vegetation with no fluid beside it; never a player's block. */
+    private static boolean isCuttable(ServerLevel level, BlockPos pos) {
+        BlockState state = level.getBlockState(pos);
+        if (state.isAir()) {
+            return false;
+        }
+        return DigStep.isDiggable(level, pos) || (state.canBeReplaced() && state.getFluidState().isEmpty());
     }
 
     /** True when a column's highest solid, non-leaf block above the floor is not one the cutting pass would take. */
@@ -204,8 +213,9 @@ public final class SitePrep implements Job {
 
     /**
      * The lowest cell below the floor, down to each column's ground, that is either already open (air, fluid or
-     * replaceable vegetation like grass) or covered by natural vegetation the cutting pass would also take (flowers,
-     * saplings). A cell with no collision shape that is neither (a torch, a player's block) is never a candidate here.
+     * replaceable vegetation like grass) or covered by natural vegetation the cutting pass would also take (a
+     * flower, a mushroom, a sapling). A cell with no collision shape that is neither (a torch, a player's block) is
+     * never a candidate here.
      */
     private static @Nullable FillTarget findFillCandidate(ServerLevel level, Footprint area, int floor) {
         for (int y = floor - MAX_DROP; y < floor; y++) {
@@ -250,9 +260,13 @@ public final class SitePrep implements Job {
         return false;
     }
 
-    /** Natural growth a paver clears like the cutting pass clears a mound: flowers and saplings, never player builds. */
+    /**
+     * Natural growth a paver clears like the cutting pass clears a mound: every vanilla flower, mushroom, sapling,
+     * crop and bush shares {@link BushBlock} as an ancestor, so this is general rather than a hand-picked tag list.
+     * A player's block (a torch, a chest) is never a {@code BushBlock} and stays an obstruction.
+     */
     private static boolean isClearableVegetation(BlockState state) {
-        return state.is(BlockTags.FLOWERS) || state.is(BlockTags.SAPLINGS);
+        return state.getBlock() instanceof BushBlock;
     }
 
     /** The first free y below the floor: one above the first solid block found searching down, capped at {@code floor - MAX_DROP}. */
@@ -263,5 +277,51 @@ public final class SitePrep implements Job {
             }
         }
         return floor - MAX_DROP;
+    }
+
+    /**
+     * Breaks a cell only after checking, the moment the villager arrives, that it still holds what planning expected;
+     * {@link BreakBlock} itself breaks whatever is there, so a block a player placed into the cell during the
+     * approach (a chest, say) would otherwise be destroyed. {@link ChopTree} checks a log the same way right before
+     * felling it. A cell that no longer qualifies fails without being touched, counting as an obstruction through the
+     * usual retry bookkeeping.
+     */
+    private static final class VerifiedBreak implements Task {
+        private final BlockPos pos;
+        private final BiPredicate<ServerLevel, BlockPos> stillExpected;
+        private @Nullable BreakBlock delegate;
+        private boolean obstructed;
+
+        VerifiedBreak(BlockPos pos, BiPredicate<ServerLevel, BlockPos> stillExpected) {
+            this.pos = pos;
+            this.stillExpected = stillExpected;
+        }
+
+        @Override
+        public void start(TaskContext ctx) {
+            if (stillExpected.test(ctx.level(), pos)) {
+                delegate = new BreakBlock(pos);
+                delegate.start(ctx);
+            } else {
+                obstructed = true;
+            }
+        }
+
+        @Override
+        public Status tick(TaskContext ctx) {
+            return obstructed ? Status.FAILED : delegate.tick(ctx);
+        }
+
+        @Override
+        public void stop(TaskContext ctx) {
+            if (delegate != null) {
+                delegate.stop(ctx);
+            }
+        }
+
+        @Override
+        public String describe(TaskContext ctx) {
+            return obstructed ? "an unexpected block at " + pos.toShortString() : delegate.describe(ctx);
+        }
     }
 }

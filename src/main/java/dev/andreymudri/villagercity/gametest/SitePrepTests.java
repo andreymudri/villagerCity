@@ -243,4 +243,98 @@ public final class SitePrepTests {
             helper.succeed();
         });
     }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_siteprep_mushroom_gap", timeoutTicks = 3000, skyAccess = true)
+    public static void levelsAGapCoveredByAMushroom(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 12, false);
+        int floor = 5;
+        BlockPos origin = new BlockPos(10, floor, 10);
+        village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(origin), new Vec3i(3, 1, 3), null, 0L, 0, false));
+        platform(helper, floor, 5, 5, 25, 25);
+        // A brown mushroom on podzol: natural vegetation not covered by minecraft:flowers or minecraft:saplings, so
+        // this only passes when the clear check is general rather than a hand-picked tag list.
+        BlockPos gap = new BlockPos(11, floor - 1, 11);
+        helper.setBlock(11, floor - 2, 11, Blocks.PODZOL);
+        helper.setBlock(gap, Blocks.BROWN_MUSHROOM);
+        storehouseWith(helper, village, new BlockPos(20, floor, 20), Items.DIRT, 64);
+        pavingVillager(helper, 16, floor, 16, village);
+        helper.succeedWhen(() -> {
+            Plot plot = village.plots().get(0);
+            helper.assertTrue(plot.prepared(), "not prepared yet");
+            helper.assertBlockPresent(Blocks.DIRT, gap);
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_siteprep_berry_gap", timeoutTicks = 3000, skyAccess = true)
+    public static void levelsAGapCoveredByASweetBerryBush(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 12, false);
+        int floor = 5;
+        BlockPos origin = new BlockPos(10, floor, 10);
+        village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(origin), new Vec3i(3, 1, 3), null, 0L, 0, false));
+        platform(helper, floor, 5, 5, 25, 25);
+        // A sweet berry bush: also natural vegetation outside minecraft:flowers and minecraft:saplings.
+        BlockPos gap = new BlockPos(11, floor - 1, 11);
+        helper.setBlock(11, floor - 2, 11, Blocks.DIRT);
+        helper.setBlock(gap, Blocks.SWEET_BERRY_BUSH);
+        storehouseWith(helper, village, new BlockPos(20, floor, 20), Items.DIRT, 64);
+        pavingVillager(helper, 16, floor, 16, village);
+        helper.succeedWhen(() -> {
+            Plot plot = village.plots().get(0);
+            helper.assertTrue(plot.prepared(), "not prepared yet");
+            helper.assertBlockPresent(Blocks.DIRT, gap);
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_siteprep_chest_midflight", timeoutTicks = 1500, skyAccess = true)
+    public static void neverBreaksABlockPlacedDuringTheApproach(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 12, false);
+        int floor = 5;
+        BlockPos origin = new BlockPos(10, floor, 10);
+        village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(origin), new Vec3i(3, 1, 3), null, 0L, 0, false));
+        platform(helper, floor, 5, 5, 40, 40);
+        // An ordinary dirt bump the paver plans to cut, spawned far enough away that a player's chest can land in the
+        // same cell mid-approach, well after planning picked it but well before the villager arrives to break it.
+        BlockPos cutTarget = new BlockPos(11, floor + 1, 11);
+        helper.setBlock(cutTarget, Blocks.DIRT);
+        pavingVillager(helper, 30, floor, 30, village);
+        helper.runAfterDelay(10, () -> helper.setBlock(cutTarget, Blocks.CHEST));
+        helper.runAfterDelay(1400, () -> {
+            boolean prepared = village.plots().get(0).prepared();
+            VillageTestSupport.remove(helper, village);
+            helper.assertBlockPresent(Blocks.CHEST, cutTarget);
+            helper.assertTrue(!prepared, "plot prepared despite the chest placed during the approach");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_siteprep_skip_release", timeoutTicks = 1500, skyAccess = true)
+    public static void releasesAnImpossiblePlotAfterFiveFailures(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 12, false);
+        int floor = 5;
+        platform(helper, floor, 5, 5, 25, 15);
+        UUID stuckId = UUID.randomUUID();
+        BlockPos stuckOrigin = new BlockPos(10, floor, 10);
+        village.addPlot(new Plot(stuckId, "villagercity:blueprint/starter_house", helper.absolutePos(stuckOrigin), new Vec3i(3, 1, 3), null, 0L, 0, false));
+        // An unbreakable torch in the first plot's fill gap; the paver must give up on it after five failures instead
+        // of starving the second, perfectly flat, plot of any attention at all.
+        helper.setBlock(11, floor - 2, 11, Blocks.STONE);
+        helper.setBlock(11, floor - 1, 11, Blocks.TORCH);
+        UUID freeId = UUID.randomUUID();
+        BlockPos freeOrigin = new BlockPos(18, floor, 10);
+        village.addPlot(new Plot(freeId, "villagercity:blueprint/starter_house", helper.absolutePos(freeOrigin), new Vec3i(3, 1, 3), null, 0L, 0, false));
+        pavingVillager(helper, 14, floor, 12, village);
+        helper.succeedWhen(() -> {
+            Plot stuck = village.plots().stream().filter(p -> p.id().equals(stuckId)).findFirst().orElseThrow();
+            Plot free = village.plots().stream().filter(p -> p.id().equals(freeId)).findFirst().orElseThrow();
+            helper.assertTrue(free.prepared(), "the free plot was never reached; the stuck plot was never skipped");
+            helper.assertTrue(!stuck.prepared(), "the torch plot should never be prepared");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
 }
