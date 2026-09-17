@@ -28,15 +28,12 @@ player-built log structures, never get stuck on an unreachable tree, never hire 
 tasks cleanly when released, cannot be farmed for free storehouses or forged contribution credit, and the
 tests that guard these behaviours can actually fail.
 
-## Not Yet Specified
-
-- A citizen that changes dimension keeps its roster entry forever (removal reason `CHANGED_DIMENSION` does not destroy). Should the roster expire entries whose villager has not been seen for some time, and how long is safe for villagers sitting in unloaded chunks?
-
 ## Out of Scope
 
 - PlotPlanner `MAX_CANDIDATES` capping the search below `radius + 16` — raising it multiplies column sampling on every failed claim; it belongs with the growth/performance work in sub-project 3
 - PlotPlanner buried-column and leaves regression tests — low value until the planner changes again in sub-project 3
 - Crediting only "useful" deposits (junk items still earn credit) — contribution rules are designed with mayorship in sub-project 5
+- Storehouse debt handed between players (A withdraws, B deposits for credit) — per-player debt cannot see a handoff; village-level accounting comes with mayorship in sub-project 5
 
 ---
 
@@ -353,3 +350,106 @@ from several slots into the first slot's components, losing names and enchantmen
 - [ ] **Step 5:** Build and `scripts/gametest.sh` — both pass, including `citizenInsertAndExtract` and `EndToEndTests`.
 
 - [ ] **Step 6:** Commit: `fix: credit storehouse deposits per player click and keep withdrawn stacks apart`
+
+### Task 7: storehouse exits charge or refuse
+
+**Files:**
+- Modify: `src/main/java/dev/andreymudri/villagercity/storehouse/StorehouseBlockEntity.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/storehouse/StorehouseBlock.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/storehouse/StorehouseContent.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/storehouse/StorehouseMenu.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/gametest/StorehouseTests.java`
+
+**Depends:** T6
+
+**Model:** capable
+
+Design: `docs/specs/2026-09-16-fixes1-phase3-design.md` §1. Finding (phase 2 security review, reproduced): only
+click withdrawals create debt, so citizen items pulled out by a hopper under the storehouse, or dropped by
+breaking it, earn full DEPOSIT credit when clicked back in. NeoForge registers no `IItemHandler` capability
+for modded block entity types (`CapabilityHooks` lists vanilla types only), so hoppers reach the storehouse
+through the vanilla `Container` path, which checks `Container.canTakeItem`.
+
+- [ ] **Step 1:** In `StorehouseTests`, add (RED first, each shown failing on the current code):
+  - `hoppersCannotPullFromStorehouse` (batch `vc_storehouse_hopper_out`): storehouse block at (10,2,10) with a `Blocks.HOPPER` at (10,1,10) below it; `insertFromCitizen(new ItemStack(Items.OAK_LOG, 5))`; after 60 ticks (`helper.runAfterDelay`) assert the storehouse still holds 5 oak logs and the hopper is empty, then succeed.
+  - `hoppersCanStillInsertWithoutCredit` (batch `vc_storehouse_hopper_in`): village whose `storehousePos` is the storehouse at (10,1,10); a `Blocks.HOPPER` facing down at (10,2,10) holding 3 cobblestone; `succeedWhen` the storehouse holds 3 cobblestone and `village.ledger()` has no DEPOSIT credit for anyone; remove the village before succeeding.
+  - `breakingChargesTheBreakerDebt` (batch `vc_storehouse_break`): village with storehouse at (10,1,10) holding 12 oak logs via `insertFromCitizen`; `ServerPlayer player = helper.makeMockServerPlayerInLevel()`, `player.setGameMode(GameType.SURVIVAL)`, `player.gameMode.destroyBlock(abs)`; assert `village.debt(player.getUUID()) == 12`. Then put a fresh storehouse block back at the same position, give the player 12 oak logs in hotbar slot 0, open `new StorehouseMenu(1, player.getInventory(), storehouse)` and quick-move them in; assert DEPOSIT credit 0 and debt 0. Discard item entities and the mock player, remove the village, succeed.
+  - `explosionsDoNotOpenStorehouse` (batch `vc_storehouse_explosion`): storehouse at (10,1,10); `helper.getLevel().explode(null, x + 2.5, y + 0.5, z + 0.5, 4.0f, Level.ExplosionInteraction.TNT)` using the absolute storehouse position; assert the storehouse block is still present.
+
+- [ ] **Step 2:** `StorehouseMenu`: extract the village lookup from `settle` into `public static @Nullable VillageData owner(ServerLevel level, BlockPos storehousePos)` (the village whose `storehousePos()` equals the position) and use it in `settle`. Add `public static void chargeDebt(ServerLevel level, BlockPos storehousePos, UUID player, long amount)`: when `amount > 0` and an owner exists, `setDebt(player, debt + amount)` and mark the registry dirty.
+
+- [ ] **Step 3:** `StorehouseBlockEntity`: override `canTakeItem(Container target, int slot, ItemStack stack)` to return `false`, with a Javadoc line saying hoppers may insert but never extract, because extraction outside a menu click would bypass debt. `extractForCitizen` does not use `canTakeItem` and keeps working.
+
+- [ ] **Step 4:** `StorehouseBlock`: override `playerWillDestroy(Level level, BlockPos pos, BlockState state, Player player)`. On a `ServerLevel`, when the block entity is a `StorehouseBlockEntity`, sum the counts of its 27 slots and call `StorehouseMenu.chargeDebt(serverLevel, pos, player.getUUID(), total)`; then return `super.playerWillDestroy(...)`. Contents still drop in `onRemove` as before.
+
+- [ ] **Step 5:** `StorehouseContent`: build the block properties as `BlockBehaviour.Properties.ofFullCopy(Blocks.BARREL).explosionResistance(1200.0f)`. Check the method name in the decompiled `BlockBehaviour.Properties` before using it.
+
+- [ ] **Step 6:** Build and `scripts/gametest.sh` — both pass, including `dropsContentsWhenBroken`, `citizenInsertAndExtract` and `EndToEndTests`.
+
+- [ ] **Step 7:** Commit: `fix: storehouse refuses hopper extraction, charges breakers debt and resists explosions`
+
+### Task 8: citizens leaving free their job and plots, and plots resume
+
+**Files:**
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/Plot.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageData.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageCodecs.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/CitizenRoster.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/job/BuilderJob.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/gametest/BuilderTests.java`
+- Create: `src/main/java/dev/andreymudri/villagercity/gametest/PlotHandoverTests.java`
+
+**Depends:** T2, T6
+
+**Model:** capable
+
+Design: `docs/specs/2026-09-16-fixes1-phase3-design.md` §2 and §3. Findings: (a, phase 1 correctness review,
+reproduced) `CitizenRoster` ignores `CHANGED_DIMENSION`, so a citizen that leaves the dimension keeps its
+roster entry and the village never re-hires; (b, e2e debugger) after an abandon the builder needs a full
+blueprint's materials again, which rarely happens; (c) a builder that dies or leaves keeps its plot, and
+`claimPlot` refuses while any plot exists, so no builder ever builds again.
+
+- [ ] **Step 1:** Create `PlotHandoverTests.java` (RED first; record each failure):
+  - `dimensionChangeFreesTheJob` (batch `vc_handover_dim`, timeoutTicks 400): `freshVillage(helper, (24,1,24), 8, false)`; spawn villagers at (20,1,20) and (28,1,20); `VillageTicker.tickVillage` hires a lumberjack and a builder; force-load nether chunk (0,0) (`netherLevel.setChunkForced(0, 0, true)`), teleport the lumberjack with `teleportTo(netherLevel, 8.5, 70, 8.5, Set.of(), 0, 0)`; spawn a replacement at (20,1,28); after 100 ticks tick the village again; `succeedWhen` the replacement's `CitizenData.job()` is LUMBERJACK and the roster holds exactly one LUMBERJACK. Discard the teleported villager, un-force the chunk and remove the village before succeeding.
+  - `leavingBuilderPlotIsTakenOver` (batch `vc_handover_builder`, timeoutTicks 4000): village as in `BuilderTests`; builder A enrolled with `new BuilderJob()` and a plot at origin (8,1,8) assigned to A; pre-place the 25 floor cobblestone blocks of the plot; stock the storehouse with exactly the materials for the remaining placements (assert `!storehouse.hasAll(blueprint.requiredMaterials())`); `A.discard()`; assert the plot now has a null builder; enroll builder B at (12,1,14); `succeedWhen` `village.houseCount() == 1`.
+  - `releasedPlotWaitsForRetry` (batch `vc_handover_retry`, timeoutTicks 600): stocked village; add a plot with a null builder, `retryAt = gameTime + 200`, `abandons = 1`; enroll a builder; at +100 ticks assert `village.plotBuiltBy(builder)` is empty; `succeedWhen` (after +200) it is present.
+  - `plotFieldsSurviveCodecRoundTrip` (no batch): a village with one released plot (builder null, retryAt 1234, abandons 2) and one assigned plot; encode with `VillageCodecs.VILLAGE` to `NbtOps.INSTANCE` and parse back; assert both plots equal the originals. Then remove `retry_at` and `abandons` from the assigned plot's tag, parse again, and assert retryAt 0, abandons 0 and the builder unchanged.
+
+- [ ] **Step 2:** `BuilderTests.abandonsPlotAfterRepeatedFailures`: the first abandon now releases the plot. Replace `plot not abandoned` with assertions that the plot with `plotId` still exists with a null builder, `abandons == 1` and `retryAt > 0`; keep the block assertions. Add `dropsPlotOnThirdAbandon` (batch `vc_builder_abandon_drop`, timeoutTicks 3000): identical setup but the plot starts with `abandons = 2`; `succeedWhen` the plot is gone and the same four block assertions hold.
+
+- [ ] **Step 3:** `Plot`:
+```java
+/** A building in progress. A released plot has no builder and may be taken over from game time {@code retryAt}. */
+public record Plot(UUID id, String blueprint, BlockPos origin, Vec3i size, @Nullable UUID builder, long retryAt, int abandons) {
+    public Plot {
+        origin = origin.immutable();
+    }
+
+    public Plot(UUID id, String blueprint, BlockPos origin, Vec3i size, UUID builder) {
+        this(id, blueprint, origin, size, builder, 0L, 0);
+    }
+
+    public boolean released() {
+        return builder == null;
+    }
+
+    public Footprint footprint() {
+        return Footprint.of(origin, size);
+    }
+}
+```
+
+- [ ] **Step 4:** `VillageCodecs.PLOT`: `UUIDUtil.CODEC.optionalFieldOf("builder").forGetter(p -> Optional.ofNullable(p.builder()))`, `Codec.LONG.optionalFieldOf("retry_at", 0L).forGetter(Plot::retryAt)`, `Codec.INT.optionalFieldOf("abandons", 0).forGetter(Plot::abandons)`; construct with `builder.orElse(null)`.
+
+- [ ] **Step 5:** `VillageData`: `plotBuiltBy` skips released plots (`builder != null && builder.equals(...)`). Add, each replacing the matching list entry in place:
+  - `public void releasePlot(UUID plotId, long retryAt, boolean abandoned)` — builder null, the given `retryAt`, `abandons + 1` when `abandoned`.
+  - `public boolean releasePlotsBuiltBy(UUID builder)` — releases every plot held by that builder with `retryAt` 0 and `abandons` unchanged; returns whether any changed.
+  - `public void assignPlot(UUID plotId, UUID builder)` — sets the builder, keeps `retryAt` and `abandons`.
+
+- [ ] **Step 6:** `CitizenRoster.onLeave`: continue when `reason.shouldDestroy() || reason == Entity.RemovalReason.CHANGED_DIMENSION`; keep returning early for every other reason. When the village exists, call both `removeCitizen` and `releasePlotsBuiltBy` for the villager and mark the registry dirty if either changed. Update the class Javadoc.
+
+- [ ] **Step 7:** `BuilderJob`: add `MAX_ABANDONS = 3` and `RETRY_TICKS = 2400`. Where `consecutiveFailures >= MAX_CONSECUTIVE_FAILURES`: if `plot.abandons() + 1 >= MAX_ABANDONS` remove the plot, otherwise `village.releasePlot(plot.id(), level.getGameTime() + RETRY_TICKS, true)`; mark dirty, reset `consecutiveFailures`, return null. In `claimPlot`, before the `!village.plots().isEmpty()` refusal: find the first released plot with `retryAt <= level.getGameTime()`; if present, `assignPlot` it to this villager, mark dirty and return it with its builder set (no material check). Update the class Javadoc.
+
+- [ ] **Step 8:** Build and `scripts/gametest.sh` — both pass, including `BuilderTests`, `VillageLifecycleTests`, `VillageRegistryTests` and `EndToEndTests`.
+
+- [ ] **Step 9:** Commit: `fix: leaving citizens free their job and plots, and abandoned plots resume after a cooldown`
