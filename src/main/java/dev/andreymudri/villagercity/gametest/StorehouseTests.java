@@ -5,12 +5,16 @@ import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.storehouse.StorehouseContent;
 import dev.andreymudri.villagercity.storehouse.StorehouseMenu;
 import dev.andreymudri.villagercity.village.ContributionCategory;
+import dev.andreymudri.villagercity.village.VillageCodecs;
 import dev.andreymudri.villagercity.village.VillageData;
 import java.util.Map;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.NbtOps;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.player.Player;
@@ -94,6 +98,52 @@ public final class StorehouseTests {
         helper.assertTrue(withdrawn == 20 && playerSlot >= 0, "withdraw moved " + withdrawn + " logs");
         helper.assertTrue(storehouse.count(Items.OAK_LOG) == 20, "redeposit left " + storehouse.count(Items.OAK_LOG));
         helper.assertTrue(credited == 0, "credited " + credited + " for returning withdrawn logs");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_storehouse_excess")
+    public static void depositBeyondDebtCreditsOnlyTheExcess(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 12, false);
+        StorehouseBlockEntity storehouse = place(helper);
+        village.setStorehousePos(helper.absolutePos(STORE));
+        storehouse.insertFromCitizen(new ItemStack(Items.OAK_LOG, 5));
+        Player player = helper.makeMockPlayer(GameType.SURVIVAL);
+        StorehouseMenu menu = new StorehouseMenu(1, player.getInventory(), storehouse);
+
+        menu.clicked(0, 0, ClickType.QUICK_MOVE, player);
+        long debtAfterWithdraw = village.debt(player.getUUID());
+        int playerSlot = -1;
+        for (int i = StorehouseBlockEntity.SIZE; i < menu.slots.size(); i++) {
+            if (menu.getSlot(i).getItem().is(Items.OAK_LOG)) {
+                playerSlot = i;
+            }
+        }
+        if (playerSlot >= 0) {
+            menu.getSlot(playerSlot).set(new ItemStack(Items.OAK_LOG, 10));
+            menu.clicked(playerSlot, 0, ClickType.QUICK_MOVE, player);
+        }
+
+        long credited = village.ledger().total(player.getUUID(), ContributionCategory.DEPOSIT);
+        long debt = village.debt(player.getUUID());
+        VillageTestSupport.remove(helper, village);
+        helper.assertTrue(debtAfterWithdraw == 5 && playerSlot >= 0, "withdraw left debt " + debtAfterWithdraw);
+        helper.assertTrue(storehouse.count(Items.OAK_LOG) == 10, "deposit left " + storehouse.count(Items.OAK_LOG));
+        helper.assertTrue(credited == 5, "credited " + credited + " for depositing 10 against a debt of 5");
+        helper.assertTrue(debt == 0, "debt left " + debt);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void storehouseDebtSurvivesCodecRoundTrip(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(24, 1, 24)), 12);
+        UUID player = UUID.randomUUID();
+        village.setDebt(player, 20);
+
+        Tag encoded = VillageCodecs.VILLAGE.encodeStart(NbtOps.INSTANCE, village).getOrThrow();
+        VillageData decoded = VillageCodecs.VILLAGE.parse(NbtOps.INSTANCE, encoded).getOrThrow();
+
+        helper.assertTrue(decoded.debt(player) == 20, "debt after round trip " + decoded.debt(player));
         helper.succeed();
     }
 
