@@ -27,6 +27,7 @@ import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -37,6 +38,8 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 public final class UnevenPlotTests {
     private static final Vec3i HOUSE = new Vec3i(5, 5, 5);
     private static final BlockPos BELL = new BlockPos(24, 1, 24);
+    /** Where the tests put a plot the paver never manages to prepare. */
+    private static final BlockPos STUCK = new BlockPos(8, 1, 8);
     /** Terrace heights by x modulo 8: every 7 columns in a row hold both a 0 and a 3, so no spot varies by less than 3. */
     private static final int[] TERRACE = {0, 1, 2, 3, 3, 2, 1, 0};
 
@@ -226,35 +229,94 @@ public final class UnevenPlotTests {
         });
     }
 
-    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_builder_gives_up", timeoutTicks = 8000)
-    public static void aPlotLeftUnpreparedIsGivenUp(GameTestHelper helper) {
-        GameTestSupport.prepareArea(helper);
-        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+    /** Gives the village a stocked storehouse and a builder holding an unprepared plot at {@link #STUCK}. */
+    private static Villager builderOnAnUnpreparedPlot(GameTestHelper helper, VillageData village, UUID plotId, BuilderJob job) {
         Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
         BuilderTests.stockedStorehouse(helper, village, blueprint, 1);
         Villager villager = GameTestSupport.spawnVillager(helper, 12, 1, 14);
-        // A plot the paver never manages to prepare (an obstruction it may not break), on its last abandon.
-        BlockPos stuck = new BlockPos(8, 1, 8);
-        UUID plotId = UUID.randomUUID();
-        village.addPlot(new Plot(plotId, blueprint.id().toString(), helper.absolutePos(stuck), blueprint.size(), villager.getUUID(),
-                0L, BuilderJob.MAX_ABANDONS - 1, false));
-        BuilderJob job = new BuilderJob();
+        village.addPlot(new Plot(plotId, blueprint.id().toString(), helper.absolutePos(STUCK), blueprint.size(), villager.getUUID(), 0L, 0, false));
         CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
-        long started = helper.getLevel().getGameTime();
+        return villager;
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_builder_gives_up", timeoutTicks = 18000)
+    public static void aPlotNeverPreparedIsRetriedThenLeftBehind(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        UUID plotId = UUID.randomUUID();
+        BuilderJob job = new BuilderJob();
+        builderOnAnUnpreparedPlot(helper, village, plotId, job);
+        boolean[] released = {false};
         helper.succeedWhen(() -> {
-            long waited = helper.getLevel().getGameTime() - started;
-            if (waited < BuilderJob.PREPARATION_WAIT_TICKS) {
-                helper.assertTrue(village.plots().size() == 1 && village.plots().get(0).id().equals(plotId),
-                        "gave up on the plot after only " + waited + " ticks: " + village.plots());
-                helper.assertTrue("the paver to prepare the plot".equals(job.waitingFor()), "waiting for " + job.waitingFor());
-                throw new GameTestAssertException("still waiting for the paver after " + waited + " ticks");
+            helper.assertFalse(village.isFailedPlot(helper.absolutePos(STUCK)), "a plot the paver never prepared was blacklisted");
+            Optional<Plot> stuck = village.plots().stream().filter(plot -> plot.id().equals(plotId)).findFirst();
+            if (stuck.isPresent()) {
+                helper.assertTrue(stuck.get().abandons() == 0, "a preparation timeout counted as an abandon: abandons " + stuck.get().abandons());
+                released[0] |= stuck.get().released();
+                throw new GameTestAssertException("still holding the unprepared plot; waiting for " + job.waitingFor());
             }
-            helper.assertTrue(village.plots().size() == 1, "plots " + village.plots());
-            Plot plot = village.plots().get(0);
-            helper.assertFalse(plot.id().equals(plotId), "still stuck on the unprepared plot after " + waited + " ticks; waiting for " + job.waitingFor());
-            helper.assertTrue(village.isFailedPlot(helper.absolutePos(stuck)), "the abandoned plot was not marked failed");
-            helper.assertTrue(plot.prepared(), "the new plot at " + relative(helper, plot.origin()) + " is unprepared");
+            helper.assertTrue(released[0], "the plot was dropped without ever being released for a retry");
+            helper.assertTrue(village.plots().size() == 1, "no other plot claimed: " + village.plots());
+            helper.assertTrue(village.plots().get(0).prepared(), "the new plot at " + relative(helper, village.plots().get(0).origin()) + " is unprepared");
             VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_prep_timeout_retry", timeoutTicks = 12000)
+    public static void aPreparationTimeoutOnlyDelaysThePlot(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        UUID plotId = UUID.randomUUID();
+        BuilderJob job = new BuilderJob();
+        // The paver is held up for want of fill materials, which is recoverable: the plot may wait, but must not be lost.
+        Villager villager = builderOnAnUnpreparedPlot(helper, village, plotId, job);
+        boolean[] prepared = {false};
+        helper.succeedWhen(() -> {
+            helper.assertFalse(village.isFailedPlot(helper.absolutePos(STUCK)), "a plot waiting for fill materials was blacklisted");
+            if (!prepared[0]) {
+                Plot plot = village.plots().stream().filter(p -> p.id().equals(plotId)).findFirst()
+                        .orElseThrow(() -> new AssertionError("the plot was dropped instead of retried"));
+                helper.assertTrue(plot.abandons() == 0, "a preparation timeout counted as an abandon: abandons " + plot.abandons());
+                if (!plot.released()) {
+                    throw new GameTestAssertException("the plot has not been released for a retry yet; waiting for " + job.waitingFor());
+                }
+                // The materials arrive and the paver finishes the plot it had to leave.
+                village.assignPlot(plotId, villager.getUUID());
+                village.markPlotPrepared(plotId);
+                prepared[0] = true;
+            }
+            helper.assertTrue(village.houseCount() == 1, "the prepared plot was not built; waiting for " + job.waitingFor());
+            helper.assertFalse(village.isFailedPlot(helper.absolutePos(STUCK)), "the built spot was blacklisted");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_prep_night", timeoutTicks = 14000)
+    public static void aNightDoesNotSpendThePreparationWait(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        UUID plotId = UUID.randomUUID();
+        BuilderJob job = new BuilderJob();
+        builderOnAnUnpreparedPlot(helper, village, plotId, job);
+        // Night falls 1000 ticks into the wait (the villagers' REST window is day time 12000 to 24000), and neither the
+        // builder nor the paver runs through it, so those 12000 ticks must not count against the wait.
+        helper.getLevel().getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(true, helper.getLevel().getServer());
+        helper.getLevel().setDayTime(11000);
+        helper.runAfterDelay(13400, () -> {
+            long dayTime = helper.getLevel().getDayTime();
+            Optional<Plot> plot = village.plots().stream().filter(p -> p.id().equals(plotId)).findFirst();
+            boolean failed = village.isFailedPlot(helper.absolutePos(STUCK));
+            String waiting = job.waitingFor();
+            helper.getLevel().getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(false, helper.getLevel().getServer());
+            helper.getLevel().setDayTime(GameTestSupport.DAY_TIME);
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(dayTime > 24000, "the night never passed: day time " + dayTime);
+            helper.assertFalse(failed, "the plot was blacklisted over a night");
+            helper.assertTrue(plot.isPresent(), "the plot was dropped over a night");
+            helper.assertFalse(plot.get().released(), "the plot was given up over a night, in which nobody worked");
+            helper.assertTrue(plot.get().abandons() == 0, "abandons " + plot.get().abandons());
+            helper.assertTrue("the paver to prepare the plot".equals(waiting), "waiting for " + waiting);
+            helper.succeed();
         });
     }
 

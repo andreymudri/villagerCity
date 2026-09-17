@@ -8,6 +8,7 @@ import dev.andreymudri.villagercity.citizen.Job;
 import dev.andreymudri.villagercity.citizen.JobType;
 import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
+import dev.andreymudri.villagercity.citizen.TaskScheduler;
 import dev.andreymudri.villagercity.citizen.TaskSequence;
 import dev.andreymudri.villagercity.citizen.task.BreakBlock;
 import dev.andreymudri.villagercity.citizen.task.Deposit;
@@ -48,16 +49,24 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Takes over a released plot once its retry time has passed, or else claims a new plot once the storehouse holds a
  * full blueprint's materials. A plot needing earthwork is only claimed while the village has a paver, and the builder
- * waits until the paver has prepared it, giving the plot up after {@link #PREPARATION_WAIT_TICKS}. Then it withdraws
- * what is missing, and clears and places blocks in build order. Progress lives in the world and the plot record, so a reloaded or replacement builder resumes by skipping
- * blocks that are already right. A plot that keeps failing is released for a cooldown, and dropped after {@link #MAX_ABANDONS} abandons.
+ * waits until the paver has prepared it, handing a plot that stays unprepared back after
+ * {@link #PREPARATION_WAIT_TICKS} of working time. Then it withdraws what is missing, and clears and places blocks in
+ * build order. Progress lives in the world and the plot record, so a reloaded or replacement builder resumes by
+ * skipping blocks that are already right. A plot that keeps failing to build is released for a cooldown, and dropped
+ * and its spot marked failed after {@link #MAX_ABANDONS} abandons.
  */
 public final class BuilderJob implements Job {
     public static final int MAX_CONSECUTIVE_FAILURES = 5;
     public static final int MAX_ABANDONS = 3;
     public static final int RETRY_TICKS = 2400;
-    /** How long the builder waits for the paver to prepare its plot before giving the plot up. */
+    /**
+     * How long the builder waits for the paver to prepare its plot before releasing it. Counted in ticks the builder was
+     * planned for, never in raw game time: villagers rest half of every day ({@link TaskScheduler#shouldYield}), and the
+     * paver rests with them, so a night must not spend the wait.
+     */
     public static final int PREPARATION_WAIT_TICKS = 6000;
+    /** How many preparation waits one plot gets before the builder leaves it for another spot. */
+    public static final int MAX_PREPARATION_WAITS = 2;
     public static final double WORK_REACH = 4.0;
     public static final int STAND_ASIDE_DISTANCE = 2;
     public static final double STAND_ASIDE_REACH = 0.9;
@@ -69,9 +78,12 @@ public final class BuilderJob implements Job {
     public static final int PATH_CHECKS_PER_SEARCH = 3;
 
     private int consecutiveFailures;
-    /** The plot whose preparation the builder is waiting for, and since when; a plot never prepared is given up. */
+    /** The plot whose preparation the builder is waiting for; a plot never prepared is left for another spot. */
     private @Nullable UUID unpreparedPlot;
-    private long waitingSince;
+    /** Ticks the builder has been planned for while its plot was unprepared, and the game time of the last of them. */
+    private long preparationWait;
+    private long lastPreparationCheck;
+    private int preparationWaits;
     /** Whether the last planned task works at the plot; only those failures count toward abandoning it. */
     private boolean atPlot;
     private @Nullable String waitingFor;
@@ -103,17 +115,33 @@ public final class BuilderJob implements Job {
         }
         Plot plot = mine.get();
         if (!plot.prepared()) {
+            long now = level.getGameTime();
             if (unpreparedPlot == null || !unpreparedPlot.equals(plot.id())) {
                 unpreparedPlot = plot.id();
-                waitingSince = level.getGameTime();
+                preparationWait = 0;
+                preparationWaits = 0;
+            } else {
+                // Only the time the builder was actually planned for counts; the gap across a night counts as one check.
+                preparationWait += Math.min(now - lastPreparationCheck, TaskScheduler.IDLE_RETRY_TICKS);
             }
-            if (level.getGameTime() - waitingSince < PREPARATION_WAIT_TICKS) {
+            lastPreparationCheck = now;
+            if (preparationWait < PREPARATION_WAIT_TICKS) {
                 waitingFor = "the paver to prepare the plot";
                 return null;
             }
-            // The paver cannot prepare this plot: give it up, so the village claims another one instead of stalling.
-            unpreparedPlot = null;
-            giveUp(level, village, plot);
+            // The paver is not getting there: hand the plot back, and after enough waits look elsewhere. A plot nobody
+            // prepared has not failed to build, so this never counts as an abandon and never marks the spot failed;
+            // the spot is only skipped for a while, as an unreachable one is.
+            preparationWait = 0;
+            preparationWaits++;
+            if (preparationWaits >= MAX_PREPARATION_WAITS) {
+                unpreparedPlot = null;
+                village.removePlot(plot.id());
+                village.markPlotUnreachable(plot.origin(), now + UNREACHABLE_PLOT_TICKS);
+            } else {
+                village.releasePlot(plot.id(), now + RETRY_TICKS, false);
+            }
+            VillageRegistry.get(level).setDirty();
             return null;
         }
         unpreparedPlot = null;
