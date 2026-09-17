@@ -9,13 +9,14 @@ import java.util.Deque;
 import java.util.List;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
-import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.phys.Vec3;
 
 /**
  * Fells a tree from its base, top log first, breaking every log including the ones above normal reach, so no trunk
- * top or branch is left floating. Breaking top-down keeps the base standing until last, so a felling cut short (a
- * reload, a released citizen) leaves a tree the finder still recognises. The villager must stand near the base
+ * top or branch is left floating. The base breaks last, so a felling cut short (a reload, a released citizen) leaves a
+ * base the village remembers and the finder still recognises. Each log is checked again right before it breaks: one
+ * replaced since planning by another kind, or by a log someone placed, is left alone. The villager must stand near the base
  * while breaking; when something moved it away (nightfall, panic, trading) it walks back first. Logs already gone
  * are skipped, and a failed log (protected, say) does not abort the rest.
  */
@@ -26,15 +27,19 @@ final class ChopTree implements Task {
     static final double STAND_DISTANCE = 4.0;
 
     private final BlockPos base;
+    private final Block logBlock;
     private final Deque<BlockPos> remaining;
     private @Nullable BreakBlock current;
     private @Nullable BlockPos breaking;
     private @Nullable MoveTo returning;
 
-    ChopTree(BlockPos base, List<BlockPos> logs) {
+    /** {@code logs} run bottom to top and include {@code base}. */
+    ChopTree(BlockPos base, List<BlockPos> logs, Block logBlock) {
         this.base = base.immutable();
+        this.logBlock = logBlock;
         this.remaining = new ArrayDeque<>();
-        logs.forEach(this.remaining::push);
+        this.remaining.push(this.base);
+        logs.stream().filter(pos -> !pos.equals(this.base)).forEach(this.remaining::push);
     }
 
     @Override
@@ -65,7 +70,8 @@ final class ChopTree implements Task {
                 return Status.SUCCESS;
             }
             remaining.poll();
-            if (!ctx.level().getBlockState(next).is(BlockTags.LOGS)
+            if (!ctx.level().getBlockState(next).is(logBlock)
+                    || PlacedLogs.get(ctx.level()).contains(next)
                     || ctx.villager().distanceToSqr(Vec3.atCenterOf(next)) > FELL_REACH * FELL_REACH) {
                 continue;
             }

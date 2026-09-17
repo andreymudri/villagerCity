@@ -77,7 +77,6 @@ public final class TreeIdentityTests {
         boolean cancelled = placeAs(level, player, pos, Blocks.OAK_LOG.defaultBlockState());
         boolean remembered = PlacedLogs.get(level).contains(pos);
         boolean broken = player.gameMode.destroyBlock(pos);
-        boolean forgotten = !PlacedLogs.get(level).contains(pos);
 
         BlockPos guarded = helper.absolutePos(new BlockPos(12, 1, 10));
         PROTECTED_PLACE.add(guarded);
@@ -88,9 +87,12 @@ public final class TreeIdentityTests {
         level.getServer().getPlayerList().remove(player);
 
         helper.assertTrue(!cancelled && remembered, "player-placed log not remembered");
-        helper.assertTrue(broken && forgotten, "broken log still remembered");
         helper.assertTrue(guardedCancelled && !guardedRemembered, "cancelled placement remembered");
-        helper.succeed();
+        helper.assertTrue(broken, "placed log not broken");
+        helper.runAfterDelay(2, () -> {
+            helper.assertTrue(!PlacedLogs.get(level).contains(pos), "broken log still remembered");
+            helper.succeed();
+        });
     }
 
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_identity_citizen")
@@ -200,9 +202,21 @@ public final class TreeIdentityTests {
         BlockPos outside = new BlockPos(box.maxX() + 3, box.minY(), box.maxZ() + 3);
         boolean insideFlagged = TreeFinder.insideStructure(level, inside);
         boolean outsideFlagged = TreeFinder.insideStructure(level, outside);
+        plantAbsolute(level, inside);
+        plantAbsolute(level, outside);
+        boolean insideTree = TreeFinder.trunk(level, inside).isPresent();
+        boolean outsideTree = TreeFinder.trunk(level, outside).isPresent();
         startChunk.setStartForStructure(structure, StructureStart.INVALID_START);
+        boolean insideTreeWithoutHut = TreeFinder.trunk(level, inside).isPresent();
+        for (BlockPos base : List.of(inside, outside)) {
+            for (BlockPos pos : BlockPos.betweenClosed(base.offset(-1, 0, -1), base.offset(1, 5, 1))) {
+                level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+            }
+        }
         helper.assertTrue(insideFlagged, "position inside a swamp hut piece not flagged");
         helper.assertTrue(!outsideFlagged, "position outside the swamp hut flagged");
+        helper.assertTrue(!insideTree && insideTreeWithoutHut, "tree inside the swamp hut accepted (without the hut: " + insideTreeWithoutHut + ")");
+        helper.assertTrue(outsideTree, "tree outside the swamp hut rejected");
         helper.succeed();
     }
 
@@ -303,6 +317,209 @@ public final class TreeIdentityTests {
             helper.assertTrue(logs == 0, "logs left " + logs);
             VillageTestSupport.remove(helper, village);
         });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_identity_log_above")
+    public static void aTreeNeedsALogOfItsKindInThe3x3AboveItsBase(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        // Leaning like an acacia: the second log stands diagonally above the base.
+        BlockPos leaning = new BlockPos(10, 1, 10);
+        helper.setBlock(leaning, Blocks.OAK_LOG);
+        for (int y = 1; y <= 3; y++) {
+            helper.setBlock(leaning.offset(1, y, 1), Blocks.OAK_LOG);
+        }
+        canopy(helper, leaning.offset(1, 3, 1));
+        // A ground log whose only log above stands two blocks east, reached through the log beside it.
+        BlockPos beside = new BlockPos(30, 1, 10);
+        helper.setBlock(beside, Blocks.OAK_LOG);
+        helper.setBlock(beside.east(), Blocks.OAK_LOG);
+        for (int y = 1; y <= 3; y++) {
+            helper.setBlock(beside.offset(2, y, 0), Blocks.OAK_LOG);
+        }
+        canopy(helper, beside.offset(2, 3, 0));
+        // Another kind above does not count.
+        BlockPos mixed = new BlockPos(10, 1, 30);
+        helper.setBlock(mixed, Blocks.OAK_LOG);
+        for (int y = 1; y <= 3; y++) {
+            helper.setBlock(mixed.above(y), Blocks.BIRCH_LOG);
+        }
+        canopy(helper, mixed.above(3));
+        helper.assertTrue(TreeFinder.trunk(level, helper.absolutePos(leaning)).isPresent(), "leaning tree rejected");
+        helper.assertTrue(TreeFinder.trunk(level, helper.absolutePos(beside)).isEmpty(), "log with no log in the 3x3 above accepted");
+        helper.assertTrue(TreeFinder.trunk(level, helper.absolutePos(beside.east())).isPresent(), "log with a log diagonally above rejected");
+        helper.assertTrue(TreeFinder.trunk(level, helper.absolutePos(mixed)).isEmpty(), "oak log under birch logs accepted");
+        helper.succeed();
+    }
+
+    /** Natural oak leaves in a 3x3 around and above the top log. */
+    private static void canopy(GameTestHelper helper, BlockPos top) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                helper.setBlock(top.offset(dx, 1, dz), Blocks.OAK_LEAVES);
+                if (dx != 0 || dz != 0) {
+                    helper.setBlock(top.offset(dx, 0, dz), Blocks.OAK_LEAVES);
+                }
+            }
+        }
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_identity_corners", timeoutTicks = 400)
+    public static void everyCornerOfA2x2TrunkNamesTheSameTree(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos origin = helper.absolutePos(new BlockPos(24, 1, 24));
+        StringBuilder problems = new StringBuilder();
+        for (ResourceKey<ConfiguredFeature<?, ?>> species : List.of(TreeFeatures.DARK_OAK, TreeFeatures.MEGA_SPRUCE, TreeFeatures.MEGA_JUNGLE_TREE)) {
+            for (int seed = 0; seed < 4; seed++) {
+                clear(level, origin);
+                if (!grow(level, species, seed, origin)) {
+                    continue;
+                }
+                Set<BlockPos> bases = new HashSet<>();
+                Set<Integer> sizes = new HashSet<>();
+                BlockPos expected = null;
+                for (BlockPos corner : BlockPos.betweenClosed(origin.offset(-1, 0, -1), origin.offset(1, 0, 1))) {
+                    if (!level.getBlockState(corner).is(BlockTags.LOGS)) {
+                        continue;
+                    }
+                    if (expected == null) {
+                        expected = corner.immutable();
+                    }
+                    Optional<TreeFinder.Tree> tree = TreeFinder.trunk(level, corner);
+                    if (tree.isPresent()) {
+                        bases.add(tree.get().base());
+                        sizes.add(tree.get().logs().size());
+                    }
+                }
+                String name = species.location().getPath() + "#" + seed;
+                if (bases.size() != 1 || !bases.contains(expected) || sizes.size() != 1) {
+                    problems.append(' ').append(name).append(" bases=").append(bases).append(" sizes=").append(sizes).append(" expected=").append(expected);
+                }
+            }
+        }
+        clear(level, origin);
+        helper.assertTrue(problems.isEmpty(), "2x2 trunks:" + problems);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_identity_farm", timeoutTicks = 400)
+    public static void everyTreeOfADenseDarkOakFarmIsATree(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos corner = helper.absolutePos(new BlockPos(14, 1, 14));
+        for (BlockPos pos : BlockPos.betweenClosed(corner.offset(-6, -1, -6), corner.offset(22, 40, 22))) {
+            level.setBlock(pos, pos.getY() < corner.getY() ? Blocks.GRASS_BLOCK.defaultBlockState() : Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+        }
+        List<BlockPos> grown = new ArrayList<>();
+        int seed = 0;
+        for (int i = 0; i < 5; i++) {
+            for (int j = 0; j < 5; j++) {
+                BlockPos base = corner.offset(i * 3, 0, j * 3);
+                if (grow(level, TreeFeatures.DARK_OAK, seed++, base)) {
+                    grown.add(base);
+                }
+            }
+        }
+        List<String> rejected = new ArrayList<>();
+        long started = System.nanoTime();
+        for (BlockPos base : grown) {
+            if (TreeFinder.trunk(level, base).isEmpty()) {
+                rejected.add(base.toShortString());
+            }
+        }
+        long millis = (System.nanoTime() - started) / 1_000_000;
+        for (BlockPos pos : BlockPos.betweenClosed(corner.offset(-6, -1, -6), corner.offset(22, 40, 22))) {
+            level.setBlock(pos, pos.getY() < corner.getY() ? Blocks.GRASS_BLOCK.defaultBlockState() : Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+        }
+        helper.assertTrue(grown.size() >= 10, "only " + grown.size() + " dark oaks grew");
+        helper.assertTrue(rejected.isEmpty(), rejected.size() + " of " + grown.size() + " farm trees rejected: " + rejected);
+        helper.assertTrue(millis < 200, "walking " + grown.size() + " farm trees took " + millis + " ms");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_identity_recheck", timeoutTicks = 3000)
+    public static void logsReplacedAfterPlanningAreLeftStanding(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        BlockPos base = new BlockPos(26, 1, 26);
+        tallTree(helper, base);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 6, false);
+        helper.setBlock(STORE, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(STORE));
+        Villager villager = GameTestSupport.spawnVillager(helper, 26, 1, 20);
+        CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, new ItemStack(Items.STONE_AXE), new LumberjackJob());
+        BlockPos birch = base.above(3);
+        BlockPos placed = base.above(5);
+        boolean[] replaced = {false};
+        helper.succeedWhen(() -> {
+            if (!replaced[0] && logsIn(helper, base) < 12) {
+                replaced[0] = true;
+                helper.setBlock(birch, Blocks.BIRCH_LOG);
+                PlacedLogs.get(level).add(helper.absolutePos(placed));
+            }
+            int oak = 0;
+            for (int y = 0; y < 12; y++) {
+                if (y != 5 && helper.getBlockState(base.above(y)).is(Blocks.OAK_LOG)) {
+                    oak++;
+                }
+            }
+            helper.assertTrue(replaced[0] && oak == 0, "tree logs left " + oak);
+            helper.assertTrue(helper.getBlockState(birch).is(Blocks.BIRCH_LOG), "birch log put in after planning was chopped");
+            helper.assertTrue(helper.getBlockState(placed).is(Blocks.OAK_LOG), "placed log put in after planning was chopped");
+            PlacedLogs.get(level).remove(helper.absolutePos(placed));
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_identity_stumps", timeoutTicks = 3000)
+    public static void aFellingInterruptedAtTheLastLayerIsFinished(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        BlockPos origin = helper.absolutePos(new BlockPos(26, 1, 26));
+        Optional<TreeFinder.Tree> grown = Optional.empty();
+        for (int seed = 0; seed < 16 && grown.isEmpty(); seed++) {
+            clear(level, origin);
+            if (grow(level, TreeFeatures.DARK_OAK, seed, origin)) {
+                grown = accepted(level, origin);
+            }
+        }
+        helper.assertTrue(grown.isPresent(), "no dark oak grew");
+        TreeFinder.Tree tree = grown.get();
+        List<BlockPos> stumps = tree.logs().stream().filter(pos -> pos.getY() == tree.base().getY()).toList();
+        for (BlockPos pos : BlockPos.betweenClosed(origin.offset(-12, 1, -12), origin.offset(18, 40, 12))) {
+            level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+        }
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 6, false);
+        boolean foundUnremembered = TreeFinder.findNearest(level, origin, village).isPresent();
+        village.startFelling(tree.base());
+        boolean foundRemembered = TreeFinder.findNearest(level, origin, village).isPresent();
+        helper.assertTrue(stumps.size() == 4, "dark oak ground layer " + stumps);
+        helper.assertTrue(!foundUnremembered, "stumps of a tree nobody was felling accepted");
+        helper.assertTrue(foundRemembered, "stumps of a remembered felling not found");
+        helper.setBlock(STORE, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(STORE));
+        Villager villager = GameTestSupport.spawnVillager(helper, 26, 1, 20);
+        CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, new ItemStack(Items.STONE_AXE), new LumberjackJob());
+        helper.succeedWhen(() -> {
+            List<BlockPos> left = stumps.stream().filter(pos -> level.getBlockState(pos).is(BlockTags.LOGS)).toList();
+            helper.assertTrue(left.isEmpty(), "stumps left " + left);
+            helper.assertTrue(village.felling().isEmpty(), "felling still remembered " + village.felling());
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** A 4-log oak with natural leaves around its top, at an absolute position. */
+    private static void plantAbsolute(ServerLevel level, BlockPos base) {
+        for (int y = 0; y < 4; y++) {
+            level.setBlock(base.above(y), Blocks.OAK_LOG.defaultBlockState(), Block.UPDATE_CLIENTS);
+        }
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                level.setBlock(base.offset(dx, 4, dz), Blocks.OAK_LEAVES.defaultBlockState(), Block.UPDATE_CLIENTS);
+                if (dx != 0 || dz != 0) {
+                    level.setBlock(base.offset(dx, 3, dz), Blocks.OAK_LEAVES.defaultBlockState(), Block.UPDATE_CLIENTS);
+                }
+            }
+        }
     }
 
     /** A 12-log oak column with a natural canopy at y 9..12 (radius 2). */

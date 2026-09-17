@@ -19,42 +19,61 @@ entity placed. The set is saved as a long array.
   covers players and citizens: the builder places the starter house's logs through `PlaceBlock`. The listener
   reads the level's current state, not `getPlacedBlock()`, because for non-player entities NeoForge reports the
   snapshot's old state there.
-- **Removing:** a `BreakEvent` listener at `LOWEST` removes the position, and so does a placement of a non-log.
-  Any other stale entry (a log burnt, exploded or broken by a citizen) can only stop a future tree at that exact
-  position from being felled. That is the safe direction, so no other cleanup is attempted.
+  A multi-block placement records every log it placed.
+- **Growth is not placement:** a placement that replaced a sapling or a fungus is bone meal growing a tree. It
+  records nothing, and clears any entry at the positions it filled.
+- **Removing:** an entry is forgotten only once its position no longer holds a log. A placement of a non-log forgets
+  it at once. A `BreakEvent` only queues the position for a check at the end of that level tick, because the event
+  fires before the break happens: another listener may cancel it, or a mod may post one just to ask permission. A
+  sweep every 200 ticks covers removals no event reports (fire, explosions, commands), skipping unloaded chunks and
+  moving pistons.
+- **Pistons:** on `PistonEvent.Pre` (at `LOWEST`), the logs remembered within 14 blocks of the piston are noted. On
+  `Post`, each noted log whose position no longer holds a log, and whose next position along the motion holds a
+  moving piston carrying a log in that direction, moves its entry there.
 - **Not covered:** logs placed before the mod was installed, and commands (`/setblock`, `/fill`).
 
 ### 2. A tree touching a placed log or a structure is not a tree
 
-`TreeFinder.trunk` rejects the whole tree when any walked log is in `PlacedLogs`. It also rejects the tree when any
-walked log lies inside a generated structure piece
-(`level.structureManager().getStructureWithPieceAt(pos, s -> true).isValid()`). The result: village houses, and
-decor trees inside village pieces, are never felled.
+`TreeFinder.shape` rejects the whole tree when any of its logs is in `PlacedLogs`. It also rejects the tree when any
+of its logs lies inside a generated structure piece. `insideStructure` reads the chunk's structure references and
+the starts they point to without loading chunks. A start that is not in memory counts as covering the position,
+which only postpones felling there. The result: village houses, and decor trees inside village pieces, are never
+felled.
 
 ### 3. Neighbouring trees are separate trees
 
-The "supported" rule from `5587cf0` no longer rejects. After walking, a log that stands on a log of its kind
-outside the walk belongs to another trunk, so it is removed from the tree. So is every log reachable from the
-base only through it: connectivity from the base is recomputed until stable. A neighbouring tree keeps its trunk,
-and branches that reach the felled tree may go with it.
+The "supported" rule from `5587cf0` no longer rejects. The walk goes layer by layer upward. A log that stands on a
+log of its kind outside the tree belongs to another trunk, so neither it nor anything reached only through it
+joins the tree. The layers below are complete when a layer is walked, so one pass decides this, and the 256-log cap
+counts only the tree's own logs. The earlier walk capped every connected log before pruning, so it rejected most
+trees of a dense dark oak farm. A neighbouring tree keeps its trunk, and branches that reach the felled tree may go
+with it.
 
 The other rules stay:
-- ground layers within 1 block of the base, with branches spreading up to 6;
-- at most 256 logs;
-- at least 4 natural leaves;
-- a log of the same kind above the base.
+- the tree's logs on the base layer fit in a 2x2, with branches spreading up to 6;
+- at most 256 logs.
+
+**Natural** trees also need at least 4 natural leaves and a log of the same kind in the 3x3 above the scanned base.
+`trunk` requires both. `shape` reports them as a flag.
+
+A tree is named by its **base**: the ground-layer log with the smallest x, then the smallest z. Any corner of a
+2x2 trunk gives the same base. Fellings and the lumberjack's avoid list are keyed on it.
 
 ### 4. Felling survives interruption
 
 - **Interrupted break:** when `ChopTree` stops a break to walk back, the log it was breaking goes back onto the
   front of the queue.
+- **Base last:** `ChopTree` breaks top-down and breaks the base after every other log, including the rest of a 2x2
+  ground layer.
+- **Checked again before breaking:** right before breaking a log, `ChopTree` skips it if it is no longer the tree's
+  block, or if it is now in `PlacedLogs`. A log someone put in the tree after planning stays.
 - **Remembered felling:** `VillageData` keeps a saved set `felling` of tree bases (codec
   `optionalFieldOf("felling")`, a list of `BlockPos`). `LumberjackJob` adds the base when it starts a felling and
   removes it when the task finishes with the base no longer a log. A felling cut short by a failed walk-back, a
   reload or a released citizen therefore stays remembered.
-- **Finding a remembered tree:** `TreeFinder.findNearest` accepts a remembered base without the leaves rule,
-  because top-down felling removes the canopy first. Every other rule still applies. `LumberjackJob.plan` drops
-  entries whose base is no longer a log.
+- **Finding a remembered tree:** `TreeFinder.findNearest` accepts a remembered base without the leaves and
+  log-above rules, because top-down felling removes them first. A ground layer left as four stumps is still found.
+  Every other rule still applies. `LumberjackJob.plan` drops entries whose base is no longer a log.
 
 ## Testing (GameTests, failing first where the old code allows)
 
@@ -73,4 +92,18 @@ The other rules stay:
 - **Interruptions:**
   - a villager teleported away mid-break (6 ticks into a log) leaves no floating log;
   - a felling interrupted after its canopy logs are gone is found again and finished.
+- **Review round 2 (every test was shown failing with its fix reverted):**
+  - a cancelled break and a break query keep the entry, and a real break forgets it after the tick;
+  - a sweep forgets a log removed without an event;
+  - a placed stone forgets the log it replaced;
+  - a multi-block placement records every log;
+  - a bone-meal tree records nothing and clears a stale entry;
+  - a sticky piston carries the entry out and back;
+  - a tree inside a structure piece is rejected;
+  - the 3x3 log-above rule, including a different kind above;
+  - every corner of a 2x2 trunk names the same base;
+  - every tree of a 5x5 dark oak farm with 1-block gaps is accepted;
+  - logs replaced after planning (another kind, or placed) stay standing;
+  - four stumps of a remembered felling are found and cleared, and the felling is forgotten;
+  - a remembered felling survives a save.
 - **Existing tests:** all of them stay green.

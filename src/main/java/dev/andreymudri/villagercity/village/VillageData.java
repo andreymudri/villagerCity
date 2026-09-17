@@ -129,7 +129,6 @@ public final class VillageData {
         }
     }
 
-    /** When false, the village ticker leaves this village alone (used by focused GameTests). */
     /** Bases of trees a lumberjack started felling; the finder accepts them without their canopy, which goes first. */
     public List<BlockPos> felling() {
         return List.copyOf(felling);
@@ -147,6 +146,7 @@ public final class VillageData {
         return felling.remove(base);
     }
 
+    /** When false, the village ticker leaves this village alone (used by focused GameTests). */
     public boolean managed() {
         return managed;
     }

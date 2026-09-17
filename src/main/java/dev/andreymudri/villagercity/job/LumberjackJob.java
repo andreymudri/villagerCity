@@ -67,8 +67,8 @@ public final class LumberjackJob implements Job {
         avoidUntil.values().removeIf(until -> until <= now);
         target = null;
         for (BlockPos base : ctx.village().felling()) {
-            if (!ctx.level().getBlockState(base).is(BlockTags.LOGS) && ctx.village().stopFelling(base)) {
-                VillageRegistry.get(ctx.level()).setDirty();
+            if (!ctx.level().getBlockState(base).is(BlockTags.LOGS)) {
+                forgetFelling(ctx, base);
             }
         }
         Optional<TreeFinder.Tree> tree = logs >= DEPOSIT_THRESHOLD
@@ -87,7 +87,7 @@ public final class LumberjackJob implements Job {
         }
         return TaskSequence.of(
                 new MoveTo(found.base(), 2.5),
-                new ChopTree(found.base(), found.logs()),
+                new ChopTree(found.base(), found.logs(), found.logBlock()),
                 new PickUpItems(found.base(), DROP_RADIUS, LumberjackJob::isHaul),
                 new MoveTo(found.base(), 2.5),
                 new Replant(found.base(), SAPLINGS.getOrDefault(found.logBlock(), Items.AIR)));
@@ -95,12 +95,19 @@ public final class LumberjackJob implements Job {
 
     @Override
     public void onTaskFinished(TaskContext ctx, Task task, Task.Status status) {
-        if (target != null && (status == Task.Status.FAILED || TreeFinder.trunk(ctx.level(), target, false).isPresent())) {
+        if (target != null && (status == Task.Status.FAILED || TreeFinder.shape(ctx.level(), target).isPresent())) {
             avoidUntil.put(target, ctx.gameTime() + AVOID_TICKS);
         }
-        if (target != null && !ctx.level().getBlockState(target).is(BlockTags.LOGS) && ctx.village().stopFelling(target)) {
-            VillageRegistry.get(ctx.level()).setDirty();
+        if (target != null && !ctx.level().getBlockState(target).is(BlockTags.LOGS)) {
+            forgetFelling(ctx, target);
         }
         target = null;
+    }
+
+    /** Drops a remembered felling whose base log is gone; the felling breaks the base last, so the tree is down. */
+    private static void forgetFelling(TaskContext ctx, BlockPos base) {
+        if (ctx.village().stopFelling(base)) {
+            VillageRegistry.get(ctx.level()).setDirty();
+        }
     }
 }

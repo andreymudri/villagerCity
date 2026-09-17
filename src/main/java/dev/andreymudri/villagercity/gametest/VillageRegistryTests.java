@@ -38,12 +38,15 @@ public final class VillageRegistryTests {
         village.addHouse(new BuildingRecord("villagercity:blueprint/starter_house", helper.absolutePos(new BlockPos(5, 1, 5)), new Vec3i(5, 5, 5)));
         village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(new BlockPos(30, 1, 30)), new Vec3i(5, 5, 5), UUID.randomUUID()));
         village.ledger().record(UUID.randomUUID(), ContributionCategory.DEPOSIT, 42);
+        BlockPos felling = helper.absolutePos(new BlockPos(10, 1, 30));
+        village.startFelling(felling);
 
         VillageRegistry registry = VillageRegistry.get(helper.getLevel());
         CompoundTag saved = registry.save(new CompoundTag(), helper.getLevel().registryAccess());
         VillageRegistry loaded = VillageRegistry.load(saved, helper.getLevel().registryAccess());
         VillageData copy = loaded.get(village.id());
         helper.assertTrue(copy != null, "village lost on reload");
+        helper.assertTrue(copy.isFelling(felling), "remembered felling lost on reload");
         String before = VillageCodecs.VILLAGE.encodeStart(JsonOps.INSTANCE, village).getOrThrow().toString();
         String after = VillageCodecs.VILLAGE.encodeStart(JsonOps.INSTANCE, copy).getOrThrow().toString();
         helper.assertTrue(before.equals(after), "round trip changed data:\n" + before + "\n" + after);
