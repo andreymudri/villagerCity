@@ -161,9 +161,10 @@ public final class DigStep implements Task {
             villager.getNavigation().stop();
             return Status.FAILED;
         }
-        if (villager.getNavigation().isDone()) {
-            villager.getNavigation().moveTo(feet.getX() + 0.5, feet.getY(), feet.getZ() + 0.5, MoveTo.SPEED);
-        }
+        // Steered directly: a path to a neighbouring cell counts as arrived before the villager moves. The move control
+        // jumps on its own when the wanted position is a step up.
+        villager.getNavigation().stop();
+        villager.getMoveControl().setWantedPosition(feet.getX() + 0.5, feet.getY(), feet.getZ() + 0.5, MoveTo.SPEED);
         return Status.RUNNING;
     }
 

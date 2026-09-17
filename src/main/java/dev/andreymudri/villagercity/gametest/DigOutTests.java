@@ -12,6 +12,14 @@ import dev.andreymudri.villagercity.village.VillageData;
 import java.util.List;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.item.Items;
+import dev.andreymudri.villagercity.citizen.Inventories;
+import dev.andreymudri.villagercity.storehouse.StorehouseContent;
+import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
+import net.neoforged.neoforge.event.entity.living.LivingDestroyBlockEvent;
+import net.neoforged.neoforge.common.NeoForge;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.entity.npc.Villager;
@@ -31,6 +39,17 @@ public final class DigOutTests {
     private static final BlockPos POCKET = new BlockPos(10, 1, 20);
     /** Standing on top of the hill. */
     private static final BlockPos HILLTOP = new BlockPos(18, 7, 20);
+
+    /** Absolute positions a protection mod guards; breaking them is cancelled. */
+    private static final Set<BlockPos> PROTECTED = ConcurrentHashMap.newKeySet();
+
+    static {
+        NeoForge.EVENT_BUS.addListener((LivingDestroyBlockEvent e) -> {
+            if (PROTECTED.contains(e.getPos())) {
+                e.setCanceled(true);
+            }
+        });
+    }
 
     private static void hill(GameTestHelper helper, Block block) {
         for (int x = 6; x <= 26; x++) {
@@ -143,6 +162,47 @@ public final class DigOutTests {
             helper.assertTrue(villager.getUUID().equals(plot.builder()) && plot.abandons() == 0, "plot abandoned: " + plot);
             VillageTestSupport.remove(helper, village);
             helper.succeed();
+        });
+    }
+
+    /** Before the fix a protected block straight ahead was chosen anyway, its break refused, and the whole move failed. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_dig_out_protected", timeoutTicks = 2400)
+    public static void digsAroundAProtectedBlock(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        hill(helper, Blocks.STONE);
+        List<BlockPos> guarded = List.of(POCKET.east(), POCKET.east().above(), POCKET.above(2), POCKET.east().above(2));
+        guarded.forEach(pos -> PROTECTED.add(helper.absolutePos(pos)));
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = trappedVillager(helper);
+        BlockPos target = helper.absolutePos(HILLTOP);
+        ScriptedJob job = new ScriptedJob(MoveTo.digOut(target, 2.5));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results);
+            guarded.forEach(pos -> helper.assertBlockPresent(Blocks.STONE, pos));
+            guarded.forEach(pos -> PROTECTED.remove(helper.absolutePos(pos)));
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** Before the fix the builder's walk to the storehouse never dug, so a builder trapped in a cave never took materials. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_dig_out_builder", timeoutTicks = 3000)
+    public static void aTrappedBuilderDigsOutToTakeMaterials(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        hill(helper, Blocks.STONE);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        BlockPos store = HILLTOP;
+        helper.setBlock(store, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(store));
+        StorehouseBlockEntity top = helper.getBlockEntity(store);
+        blueprint.requiredMaterials().forEach((item, count) -> top.insertFromCitizen(new ItemStack(item, count)));
+        Villager villager = trappedVillager(helper);
+        village.addPlot(new Plot(UUID.randomUUID(), blueprint.id().toString(), helper.absolutePos(new BlockPos(36, 1, 36)), blueprint.size(), villager.getUUID()));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
+        helper.succeedWhen(() -> {
+            helper.assertTrue(Inventories.count(villager.getInventory(), stack -> stack.is(Items.OAK_PLANKS)) == 57, "materials never taken");
+            VillageTestSupport.remove(helper, village);
         });
     }
 
