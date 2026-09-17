@@ -31,6 +31,7 @@ not as a separate run, because they build on code that only exists on `run/fixes
 - **Breaking:** `StorehouseBlock.playerWillDestroy` (server side only) adds the total item count inside to
   the breaking player's debt with the village that owns the storehouse, then marks the registry dirty. The
   contents still drop as they do today. Breaking a storehouse that belongs to no village changes nothing.
+- **Bosses:** the storehouse joins `#minecraft:wither_immune` and `#minecraft:dragon_immune`, because a wither's block-breaking and the ender dragon call `destroyBlock` with no player, which would drop the contents with no debt (added after the phase 3 security review reproduced it).
 - **Explosions:** the block's explosion resistance is raised to obsidian's (1200) while its destroy time
   stays the same as a barrel's, so TNT and creepers cannot open it. Pistons already cannot move a block
   entity.
