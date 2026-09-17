@@ -8,11 +8,13 @@ import dev.andreymudri.villagercity.citizen.TaskSequence;
 import dev.andreymudri.villagercity.citizen.task.Deposit;
 import dev.andreymudri.villagercity.citizen.task.MoveTo;
 import dev.andreymudri.villagercity.citizen.task.PickUpItems;
+import dev.andreymudri.villagercity.village.VillageRegistry;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.item.Item;
@@ -64,6 +66,11 @@ public final class LumberjackJob implements Job {
         long now = ctx.gameTime();
         avoidUntil.values().removeIf(until -> until <= now);
         target = null;
+        for (BlockPos base : ctx.village().felling()) {
+            if (ctx.level().isLoaded(base) && !ctx.level().getBlockState(base).is(BlockTags.LOGS)) {
+                forgetFelling(ctx, base);
+            }
+        }
         Optional<TreeFinder.Tree> tree = logs >= DEPOSIT_THRESHOLD
                 ? Optional.empty()
                 : TreeFinder.findNearest(ctx.level(), ctx.villager().blockPosition(), ctx.village(), base -> avoidUntil.containsKey(base));
@@ -77,7 +84,7 @@ public final class LumberjackJob implements Job {
         target = found.base();
         return TaskSequence.of(
                 new MoveTo(found.base(), 2.5),
-                new ChopTree(found.logs()),
+                new ChopTree(found.base(), found.logs(), found.logBlock()),
                 new PickUpItems(found.base(), DROP_RADIUS, LumberjackJob::isHaul),
                 new MoveTo(found.base(), 2.5),
                 new Replant(found.base(), SAPLINGS.getOrDefault(found.logBlock(), Items.AIR)));
@@ -85,9 +92,16 @@ public final class LumberjackJob implements Job {
 
     @Override
     public void onTaskFinished(TaskContext ctx, Task task, Task.Status status) {
-        if (target != null && (status == Task.Status.FAILED || TreeFinder.trunk(ctx.level(), target).isPresent())) {
+        if (target != null && (status == Task.Status.FAILED || TreeFinder.shape(ctx.level(), target).isPresent())) {
             avoidUntil.put(target, ctx.gameTime() + AVOID_TICKS);
         }
         target = null;
+    }
+
+    /** Drops a remembered felling whose base log is gone; the felling breaks the base last, so the tree is down. */
+    private static void forgetFelling(TaskContext ctx, BlockPos base) {
+        if (ctx.village().stopFelling(base)) {
+            VillageRegistry.get(ctx.level()).setDirty();
+        }
     }
 }

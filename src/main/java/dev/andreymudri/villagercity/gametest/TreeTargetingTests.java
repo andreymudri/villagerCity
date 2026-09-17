@@ -91,6 +91,81 @@ public final class TreeTargetingTests {
         helper.succeed();
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_far", timeoutTicks = 3000)
+    public static void neverChopsFromAfarAfterBeingMoved(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos base = new BlockPos(26, 1, 26);
+        for (int y = 0; y < 12; y++) {
+            helper.setBlock(base.above(y), Blocks.OAK_LOG);
+        }
+        for (int y = 9; y <= 12; y++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    if (dx != 0 || dz != 0 || y == 12) {
+                        helper.setBlock(base.offset(dx, y, dz), Blocks.OAK_LEAVES);
+                    }
+                }
+            }
+        }
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 6, false);
+        BlockPos store = new BlockPos(6, 1, 40);
+        helper.setBlock(store, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(store));
+        Villager villager = GameTestSupport.spawnVillager(helper, 26, 1, 20);
+        CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, new ItemStack(Items.STONE_AXE), new LumberjackJob());
+        int[] state = {12, 0, 0};
+        helper.succeedWhen(() -> {
+            int logs = 0;
+            for (int y = 0; y < 12; y++) {
+                if (helper.getBlockState(base.above(y)).is(Blocks.OAK_LOG)) {
+                    logs++;
+                }
+            }
+            if (logs < state[0]) {
+                BlockPos at = villager.blockPosition().subtract(helper.absolutePos(BlockPos.ZERO));
+                state[2] = Math.max(state[2], Math.max(Math.abs(at.getX() - base.getX()), Math.abs(at.getZ() - base.getZ())));
+                if (state[1] == 0) {
+                    state[1] = 1;
+                    BlockPos far = helper.absolutePos(new BlockPos(4, 1, 4));
+                    villager.teleportTo(far.getX() + 0.5, far.getY(), far.getZ() + 0.5);
+                }
+                state[0] = logs;
+            }
+            helper.assertTrue(state[2] <= 5, "a log was broken while the lumberjack stood " + state[2] + " blocks from the tree");
+            helper.assertTrue(logs == 0, "logs left " + logs);
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_tall_behind_store", timeoutTicks = 3000)
+    public static void fellsTallTreeWithStorehouseInTheWay(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos base = new BlockPos(26, 1, 26);
+        for (int y = 0; y < 12; y++) {
+            helper.setBlock(base.above(y), Blocks.OAK_LOG);
+        }
+        for (int y = 9; y <= 12; y++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    if (dx != 0 || dz != 0 || y == 12) {
+                        helper.setBlock(base.offset(dx, y, dz), Blocks.OAK_LEAVES);
+                    }
+                }
+            }
+        }
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 6, false);
+        helper.setBlock(STORE, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(STORE));
+        Villager villager = GameTestSupport.spawnVillager(helper, 22, 1, 22);
+        CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, new ItemStack(Items.STONE_AXE), new LumberjackJob());
+        helper.succeedWhen(() -> {
+            for (int y = 0; y < 12; y++) {
+                helper.assertBlockNotPresent(Blocks.OAK_LOG, base.above(y));
+            }
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_ok")
     public static void acceptsPlantedTree(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);

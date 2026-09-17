@@ -21,12 +21,19 @@ public final class BreakBlock implements Task {
     public static final double REACH = 6.0;
 
     private final BlockPos pos;
+    private final double reach;
     private BlockState expected;
     private int required;
     private int progress;
 
     public BreakBlock(BlockPos pos) {
+        this(pos, REACH);
+    }
+
+    /** As {@link #BreakBlock(BlockPos)}, failing only when the villager is farther than {@code reach} from the block. */
+    public BreakBlock(BlockPos pos, double reach) {
         this.pos = pos.immutable();
+        this.reach = reach;
     }
 
     @Override
@@ -52,7 +59,7 @@ public final class BreakBlock implements Task {
         if (!WorldPermissions.mayBreak(level, villager, pos)) {
             return Status.FAILED;
         }
-        if (required < 0 || villager.distanceToSqr(Vec3.atCenterOf(pos)) > REACH * REACH) {
+        if (required < 0 || villager.distanceToSqr(Vec3.atCenterOf(pos)) > reach * reach) {
             return Status.FAILED;
         }
         villager.getLookControl().setLookAt(Vec3.atCenterOf(pos));
