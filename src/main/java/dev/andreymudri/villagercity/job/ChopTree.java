@@ -44,6 +44,11 @@ final class ChopTree implements Task {
     }
 
     @Override
+    public String describe(TaskContext ctx) {
+        return "felling the tree at " + base.toShortString();
+    }
+
+    @Override
     public Status tick(TaskContext ctx) {
         if (returning != null || !nearBase(ctx)) {
             if (current != null) {

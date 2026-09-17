@@ -75,7 +75,7 @@ public final class LumberjackJob implements Job {
                 ? Optional.empty()
                 : TreeFinder.findNearest(ctx.level(), ctx.villager().blockPosition(), ctx.village(), base -> avoidUntil.containsKey(base));
         if (logs >= DEPOSIT_THRESHOLD || (tree.isEmpty() && Inventories.count(inventory, LumberjackJob::isDeposit) > 0)) {
-            return storehouse == null ? null : TaskSequence.of(new MoveTo(storehouse, 2.5), new Deposit(storehouse, LumberjackJob::isDeposit));
+            return storehouse == null ? null : TaskSequence.of(MoveTo.digOut(storehouse, 2.5), new Deposit(storehouse, LumberjackJob::isDeposit));
         }
         if (tree.isEmpty()) {
             return null;

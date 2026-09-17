@@ -65,6 +65,8 @@ public final class BuilderJob implements Job {
     public static final int PATH_CHECKS_PER_SEARCH = 3;
 
     private int consecutiveFailures;
+    /** Whether the last planned task works at the plot; only those failures count toward abandoning it. */
+    private boolean atPlot;
     private @Nullable String waitingFor;
 
     @Override
@@ -75,6 +77,7 @@ public final class BuilderJob implements Job {
     @Override
     public @Nullable Task plan(TaskContext ctx) {
         waitingFor = null;
+        atPlot = false;
         ServerLevel level = ctx.level();
         VillageData village = ctx.village();
         SimpleContainer inventory = ctx.villager().getInventory();
@@ -126,14 +129,15 @@ public final class BuilderJob implements Job {
                         ? "a storehouse" : "materials: " + shortfall(level, storehouse, missing);
                 return null;
             }
-            return TaskSequence.of(new MoveTo(storehouse, 2.5), new Withdraw(storehouse, missing));
+            return TaskSequence.of(MoveTo.digOut(storehouse, 2.5), new Withdraw(storehouse, missing));
         }
+        atPlot = true;
         BlueprintPlacement next = unfinished.get(0);
         BlockPos pos = plot.origin().offset(next.offset());
         BlockState current = level.getBlockState(pos);
         if (next.state().isAir() || (!current.isAir() && !current.canBeReplaced())) {
             return TaskSequence.of(
-                    new MoveTo(pos, WORK_REACH),
+                    MoveTo.digOut(pos, WORK_REACH),
                     new BreakBlock(pos),
                     new PickUpItems(pos, 2.0, BuilderJob::isBuildingMaterial));
         }
@@ -144,7 +148,7 @@ public final class BuilderJob implements Job {
             }
         }
         return TaskSequence.of(
-                new MoveTo(pos, WORK_REACH),
+                MoveTo.digOut(pos, WORK_REACH),
                 new PlaceBlock(pos, next.state(), Blueprint.costOf(next.state())));
     }
 
@@ -191,7 +195,10 @@ public final class BuilderJob implements Job {
 
     @Override
     public void onTaskFinished(TaskContext ctx, Task task, Task.Status status) {
-        consecutiveFailures = status == Task.Status.FAILED ? consecutiveFailures + 1 : 0;
+        // Failing to reach the storehouse or take materials says nothing about the plot, so it neither counts nor resets.
+        if (atPlot) {
+            consecutiveFailures = status == Task.Status.FAILED ? consecutiveFailures + 1 : 0;
+        }
     }
 
     /** A placement is done when the block type matches (door and bed states may legitimately change) or, for air, when the cell is empty. */
@@ -208,7 +215,7 @@ public final class BuilderJob implements Job {
     }
 
     private static Task deposit(BlockPos storehouse) {
-        return TaskSequence.of(new MoveTo(storehouse, 2.5), new Deposit(storehouse, BuilderJob::isBuildingMaterial));
+        return TaskSequence.of(MoveTo.digOut(storehouse, 2.5), new Deposit(storehouse, BuilderJob::isBuildingMaterial));
     }
 
     /**

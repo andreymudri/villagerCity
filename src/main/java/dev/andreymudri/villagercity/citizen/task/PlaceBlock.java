@@ -4,6 +4,7 @@ import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
 import dev.andreymudri.villagercity.citizen.WorldPermissions;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
@@ -43,6 +44,11 @@ public final class PlaceBlock implements Task {
         this.pos = pos.immutable();
         this.state = state;
         this.cost = cost;
+    }
+
+    @Override
+    public String describe(TaskContext ctx) {
+        return "placing " + BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath() + " at " + pos.toShortString();
     }
 
     @Override

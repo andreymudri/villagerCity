@@ -4,6 +4,7 @@ import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
 import dev.andreymudri.villagercity.citizen.WorldPermissions;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.npc.Villager;
@@ -80,6 +81,11 @@ public final class BreakBlock implements Task {
             });
         }
         return Status.SUCCESS;
+    }
+
+    @Override
+    public String describe(TaskContext ctx) {
+        return "breaking " + BuiltInRegistries.BLOCK.getKey(ctx.level().getBlockState(pos).getBlock()).getPath() + " at " + pos.toShortString();
     }
 
     @Override
