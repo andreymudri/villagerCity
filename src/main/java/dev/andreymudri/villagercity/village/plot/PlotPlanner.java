@@ -31,6 +31,10 @@ public final class PlotPlanner {
     private PlotPlanner() {
     }
 
+    /** A buildable spot: its origin (minimum corner, at the floor's first free y) and the blocks to cut plus fill to level it. */
+    public record Site(BlockPos origin, int earthwork) {
+    }
+
     /** Returns the origin (minimum corner, at the first free y above ground) of a buildable plot. */
     public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size) {
         return find(level, village, size, pos -> true);
@@ -38,9 +42,23 @@ public final class PlotPlanner {
 
     /** As {@link #find(ServerLevel, VillageData, Vec3i)}, skipping buildable plots whose origin fails the predicate. */
     public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size, Predicate<BlockPos> originAllowed) {
+        return findSite(level, village, size, false, originAllowed).map(Site::origin);
+    }
+
+    /**
+     * The first spot along the spiral whose footprint plus {@link PlotRules#MARGIN} is natural ground with no fluid and no
+     * laid path. Ground varying by at most {@link PlotRules#MAX_HEIGHT_VARIANCE} is built at its highest level with no
+     * earthwork. With {@code allowEarthwork}, ground varying by at most {@link Earthwork#MAX_VARIANCE} is also accepted
+     * when levelling it at {@link Earthwork#best} takes at most {@link Earthwork#MAX_VOLUME} blocks; its origin sits on
+     * that floor.
+     */
+    public static Optional<Site> findSite(ServerLevel level, VillageData village, Vec3i size, boolean allowEarthwork, Predicate<BlockPos> originAllowed) {
         BlockPos center = village.center();
         int reach = Math.min(village.radius() + SEARCH_MARGIN, MAX_REACH);
         List<Footprint> occupied = village.occupiedFootprints();
+        boolean anyPath = !village.pathCells().isEmpty();
+        int maxVariance = allowEarthwork ? Earthwork.MAX_VARIANCE : PlotRules.MAX_HEIGHT_VARIANCE;
+        int[] groundYs = new int[(size.getX() + 2 * PlotRules.MARGIN) * (size.getZ() + 2 * PlotRules.MARGIN)];
         Long2ObjectMap<Column> cache = new Long2ObjectOpenHashMap<>();
         for (int[] offset : PlotRules.spiral(reach, STEP)) {
             int minX = center.getX() + offset[0] - size.getX() / 2;
@@ -55,8 +73,13 @@ public final class PlotPlanner {
             boolean buildable = true;
             int low = Integer.MAX_VALUE;
             int high = Integer.MIN_VALUE;
+            int columns = 0;
             for (int x = area.minX(); x <= area.maxX() && buildable; x++) {
                 for (int z = area.minZ(); z <= area.maxZ() && buildable; z++) {
+                    if (anyPath && village.isPathColumn(x, z)) {
+                        buildable = false;
+                        break;
+                    }
                     long key = BlockPos.asLong(x, 0, z);
                     Column column = cache.get(key);
                     if (column == null) {
@@ -65,14 +88,25 @@ public final class PlotPlanner {
                     }
                     low = Math.min(low, column.groundY());
                     high = Math.max(high, column.groundY());
-                    buildable = column.present() && column.natural() && !column.fluid() && high - low <= PlotRules.MAX_HEIGHT_VARIANCE;
+                    groundYs[columns++] = column.groundY();
+                    buildable = column.present() && column.natural() && !column.fluid() && high - low <= maxVariance;
                 }
             }
-            if (buildable) {
-                BlockPos origin = new BlockPos(minX, high, minZ);
-                if (originAllowed.test(origin)) {
-                    return Optional.of(origin);
+            if (!buildable) {
+                continue;
+            }
+            Site site;
+            if (high - low <= PlotRules.MAX_HEIGHT_VARIANCE) {
+                site = new Site(new BlockPos(minX, high, minZ), 0);
+            } else {
+                Earthwork.Level best = Earthwork.best(groundYs);
+                if (best.volume() > Earthwork.MAX_VOLUME) {
+                    continue;
                 }
+                site = new Site(new BlockPos(minX, best.floorY(), minZ), best.volume());
+            }
+            if (originAllowed.test(site.origin())) {
+                return Optional.of(site);
             }
         }
         return Optional.empty();

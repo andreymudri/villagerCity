@@ -5,6 +5,7 @@ import dev.andreymudri.villagercity.blueprint.BlueprintPlacement;
 import dev.andreymudri.villagercity.blueprint.Blueprints;
 import dev.andreymudri.villagercity.citizen.Inventories;
 import dev.andreymudri.villagercity.citizen.Job;
+import dev.andreymudri.villagercity.citizen.JobType;
 import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
 import dev.andreymudri.villagercity.citizen.TaskSequence;
@@ -46,9 +47,10 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * Takes over a released plot once its retry time has passed, or else claims a new plot once the storehouse holds a
- * full blueprint's materials; withdraws what is missing, then clears and places blocks in build order. Progress lives
- * in the world and the plot record, so a reloaded or replacement builder resumes by skipping blocks that are already
- * right. A plot that keeps failing is released for a cooldown, and dropped after {@link #MAX_ABANDONS} abandons.
+ * full blueprint's materials. A plot needing earthwork is only claimed while the village has a paver, and the builder
+ * waits until the paver has prepared it. Then it withdraws what is missing, and clears and places blocks in build
+ * order. Progress lives in the world and the plot record, so a reloaded or replacement builder resumes by skipping
+ * blocks that are already right. A plot that keeps failing is released for a cooldown, and dropped after {@link #MAX_ABANDONS} abandons.
  */
 public final class BuilderJob implements Job {
     public static final int MAX_CONSECUTIVE_FAILURES = 5;
@@ -95,6 +97,10 @@ public final class BuilderJob implements Job {
             }
         }
         Plot plot = mine.get();
+        if (!plot.prepared()) {
+            waitingFor = "the paver to prepare the plot";
+            return null;
+        }
         Optional<Blueprint> blueprint = Blueprints.load(level, ResourceLocation.parse(plot.blueprint()));
         if (blueprint.isEmpty()) {
             village.removePlot(plot.id());
@@ -288,15 +294,16 @@ public final class BuilderJob implements Job {
         }
         long now = level.getGameTime();
         int[] pathChecks = {0};
-        Optional<BlockPos> origin = PlotPlanner.find(level, village, blueprint.get().size(),
+        Optional<PlotPlanner.Site> site = PlotPlanner.findSite(level, village, blueprint.get().size(), village.jobCount(JobType.PAVER) > 0,
                 spot -> !village.isFailedPlot(spot) && !village.isPlotUnreachable(spot, now)
                         && pathChecks[0]++ < PATH_CHECKS_PER_SEARCH && reachable(ctx.villager(), village, spot, now));
-        if (origin.isEmpty()) {
+        if (site.isEmpty()) {
             village.setNextPlotSearch(now + PLOT_SEARCH_RETRY_TICKS);
             waitingFor = "a buildable plot near the bell";
             return Optional.empty();
         }
-        Plot plot = new Plot(UUID.randomUUID(), blueprint.get().id().toString(), origin.get(), blueprint.get().size(), ctx.villager().getUUID());
+        Plot plot = new Plot(UUID.randomUUID(), blueprint.get().id().toString(), site.get().origin(), blueprint.get().size(), ctx.villager().getUUID(),
+                0L, 0, site.get().earthwork() == 0);
         village.addPlot(plot);
         VillageRegistry.get(level).setDirty();
         return Optional.of(plot);
