@@ -75,6 +75,14 @@ The village builds in this order, which is what makes growth street-first:
 
 The existing "path from a finished house to the bell" job is gone: houses are already on the street.
 
+## Doors
+
+Houses are built on a street, so the paver no longer has to open a house door to start a route from it. Where it
+still opens one (reaching a house built by the old rule), the door it opened is **recorded on the village**, not on
+the job, and closed once the paver is clear. A door recorded as opened is closed on the next village tick even if
+the paver died, the chunk unloaded or the server restarted in between. This closes a known low finding from phase 2,
+where a wooden door could be left open forever if the paver instance went away mid-route.
+
 ## Command output
 
 `/villagercity village` gains a line: `streets: N cells, M ends, deepest H hops`. `/villagercity why` reports the
