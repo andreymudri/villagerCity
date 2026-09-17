@@ -12,6 +12,7 @@ import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
+import net.minecraft.gametest.framework.GameTestAssertException;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.Item;
@@ -60,6 +61,23 @@ public final class SitePrepTests {
         return helper.getLevel().getGameRules().getBoolean(GameRules.RULE_MOBGRIEFING);
     }
 
+    /**
+     * {@code village.plots().get(0)}, but failing the test cleanly instead of throwing a raw exception: a
+     * {@code succeedWhen} callback is polled every tick and only {@link GameTestAssertException} is caught around it
+     * (see {@code GameTestSequence.tickAndContinue}), so any other exception crashes the whole GameTest server
+     * instead of naming this one test as failed.
+     */
+    private static Plot onlyPlot(VillageData village) {
+        return village.plots().stream().findFirst()
+                .orElseThrow(() -> new GameTestAssertException("no plot registered on the village"));
+    }
+
+    /** {@link #onlyPlot} by id, for tests juggling more than one plot. */
+    private static Plot plotById(VillageData village, UUID id) {
+        return village.plots().stream().filter(p -> p.id().equals(id)).findFirst()
+                .orElseThrow(() -> new GameTestAssertException("plot " + id + " not found"));
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_siteprep_slope", timeoutTicks = 16000, skyAccess = true)
     public static void levelsASlopedPlot(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
@@ -81,7 +99,7 @@ public final class SitePrepTests {
         }
         Villager villager = pavingVillager(helper, 20, floor, 20, village);
         helper.succeedWhen(() -> {
-            Plot plot = village.plots().get(0);
+            Plot plot = onlyPlot(village);
             helper.assertTrue(plot.prepared(), "not prepared yet");
             for (int x = 9; x <= 15; x++) {
                 for (int z = 9; z <= 15; z++) {
@@ -117,7 +135,7 @@ public final class SitePrepTests {
         storehouseWith(helper, village, new BlockPos(20, floor, 20), Items.COBBLESTONE, 64);
         pavingVillager(helper, 16, floor, 16, village);
         helper.succeedWhen(() -> {
-            Plot plot = village.plots().get(0);
+            Plot plot = onlyPlot(village);
             helper.assertTrue(plot.prepared(), "not prepared yet");
             for (int y = 2; y <= floor - 1; y++) {
                 helper.assertBlockPresent(Blocks.DIRT, new BlockPos(11, y, 11));
@@ -213,7 +231,7 @@ public final class SitePrepTests {
         storehouseWith(helper, village, new BlockPos(20, floor, 20), Items.DIRT, 64);
         pavingVillager(helper, 16, floor, 16, village);
         helper.succeedWhen(() -> {
-            Plot plot = village.plots().get(0);
+            Plot plot = onlyPlot(village);
             helper.assertTrue(plot.prepared(), "not prepared yet");
             helper.assertBlockPresent(Blocks.DIRT, gap);
             VillageTestSupport.remove(helper, village);
@@ -260,7 +278,7 @@ public final class SitePrepTests {
         storehouseWith(helper, village, new BlockPos(20, floor, 20), Items.DIRT, 64);
         pavingVillager(helper, 16, floor, 16, village);
         helper.succeedWhen(() -> {
-            Plot plot = village.plots().get(0);
+            Plot plot = onlyPlot(village);
             helper.assertTrue(plot.prepared(), "not prepared yet");
             helper.assertBlockPresent(Blocks.DIRT, gap);
             VillageTestSupport.remove(helper, village);
@@ -282,7 +300,7 @@ public final class SitePrepTests {
         storehouseWith(helper, village, new BlockPos(20, floor, 20), Items.DIRT, 64);
         pavingVillager(helper, 16, floor, 16, village);
         helper.succeedWhen(() -> {
-            Plot plot = village.plots().get(0);
+            Plot plot = onlyPlot(village);
             helper.assertTrue(plot.prepared(), "not prepared yet");
             helper.assertBlockPresent(Blocks.DIRT, gap);
             VillageTestSupport.remove(helper, village);
@@ -324,7 +342,7 @@ public final class SitePrepTests {
         platform(helper, floor, 5, 5, 25, 25);
         pavingVillager(helper, 16, floor, 16, village);
         helper.succeedWhen(() -> {
-            Plot plot = village.plots().get(0);
+            Plot plot = onlyPlot(village);
             helper.assertTrue(plot.prepared(), "not prepared yet");
             VillageTestSupport.remove(helper, village);
         });
@@ -348,8 +366,8 @@ public final class SitePrepTests {
         village.addPlot(new Plot(freeId, "villagercity:blueprint/starter_house", helper.absolutePos(freeOrigin), new Vec3i(3, 1, 3), null, 0L, 0, false));
         pavingVillager(helper, 14, floor, 12, village);
         helper.succeedWhen(() -> {
-            Plot stuck = village.plots().stream().filter(p -> p.id().equals(stuckId)).findFirst().orElseThrow();
-            Plot free = village.plots().stream().filter(p -> p.id().equals(freeId)).findFirst().orElseThrow();
+            Plot stuck = plotById(village, stuckId);
+            Plot free = plotById(village, freeId);
             helper.assertTrue(free.prepared(), "the free plot was never reached; the stuck plot was never skipped");
             helper.assertTrue(!stuck.prepared(), "the torch plot should never be prepared");
             VillageTestSupport.remove(helper, village);
