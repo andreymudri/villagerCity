@@ -94,9 +94,15 @@ public final class CraftPlanner {
                 return false;
             }
             long shortfall = need - have;
-            List<RecipeHolder<?>> candidates = findCandidates(item);
-            if (candidates.isEmpty()) {
+            List<RecipeHolder<?>> recipesFor = findRecipesFor(item);
+            if (recipesFor.isEmpty()) {
                 missingBase.add(item);
+                return false;
+            }
+            List<RecipeHolder<?>> candidates = recipesFor.stream().filter(holder -> !hasRemainderIngredient(holder.value())).toList();
+            if (candidates.isEmpty()) {
+                // item has a recipe, just none we can use (every one leaves a crafting remainder we don't account
+                // for): report it through unmet, not missingBase, which names only items with no recipe at all.
                 return false;
             }
             Set<Item> missingBaseAtEntry = new LinkedHashSet<>(missingBase);
@@ -118,28 +124,30 @@ public final class CraftPlanner {
         }
 
         /**
-         * Candidate shaped, shapeless and smelting recipes that produce {@code item}, sorted by recipe id. Skips
-         * every other kind of crafting recipe and any recipe that uses an item with a crafting remainder.
+         * Shaped, shapeless and smelting recipes that produce {@code item}, sorted by recipe id. Skips every other
+         * kind of crafting recipe, but not recipes that use an item with a crafting remainder: whether {@code item}
+         * has a recipe at all (the {@link #missingBase} question) does not depend on whether the planner can use
+         * it (the {@link #hasRemainderIngredient} question); callers filter the remainder ones out themselves.
          */
-        private List<RecipeHolder<?>> findCandidates(Item item) {
-            List<RecipeHolder<?>> candidates = new ArrayList<>();
+        private List<RecipeHolder<?>> findRecipesFor(Item item) {
+            List<RecipeHolder<?>> recipesFor = new ArrayList<>();
             for (RecipeHolder<?> holder : recipes.getAllRecipesFor(RecipeType.CRAFTING)) {
                 Recipe<?> recipe = holder.value();
                 if (!(recipe instanceof ShapedRecipe) && !(recipe instanceof ShapelessRecipe)) {
                     continue;
                 }
-                if (recipe.getResultItem(registries).is(item) && !hasRemainderIngredient(recipe)) {
-                    candidates.add(holder);
+                if (recipe.getResultItem(registries).is(item)) {
+                    recipesFor.add(holder);
                 }
             }
             for (RecipeHolder<?> holder : recipes.getAllRecipesFor(RecipeType.SMELTING)) {
                 Recipe<?> recipe = holder.value();
-                if (recipe.getResultItem(registries).is(item) && !hasRemainderIngredient(recipe)) {
-                    candidates.add(holder);
+                if (recipe.getResultItem(registries).is(item)) {
+                    recipesFor.add(holder);
                 }
             }
-            candidates.sort(Comparator.comparing(holder -> holder.id().toString()));
-            return candidates;
+            recipesFor.sort(Comparator.comparing(holder -> holder.id().toString()));
+            return recipesFor;
         }
 
         private static boolean hasRemainderIngredient(Recipe<?> recipe) {

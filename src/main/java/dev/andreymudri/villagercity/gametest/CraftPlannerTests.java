@@ -139,6 +139,10 @@ public final class CraftPlannerTests {
         // consumed for free.
         helper.assertTrue(result.unmet().containsKey(Items.CAKE), "cake should be unmet, unmet " + result.unmet());
         helper.assertTrue(result.steps().isEmpty(), "no steps should be planned for a remainder-only recipe, got " + result.steps());
+        // Cake has a recipe; it was rejected for its crafting remainder, not because cake is a base material with
+        // no recipe at all, so it must not show up in missingBase (the artisan would otherwise tell the player to
+        // go fetch cake).
+        helper.assertTrue(result.missingBase().isEmpty(), "cake has a recipe, so it should not be named as missing base, got " + result.missingBase());
         helper.succeed();
     }
 
