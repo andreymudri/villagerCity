@@ -8,7 +8,8 @@ command it RTS-style.
 > **Status: early development.** Slice 1 is done: a vanilla village detects itself, hires a lumberjack and a
 > builder, gathers wood, and builds a house block by block, including after a save and reload. The slice 1
 > follow-up fixes have landed: citizens respect `doMobGriefing` and protection mods, and the storehouse credit
-> can no longer be farmed. Known open issues are listed under [Known issues](#known-issues).
+> can no longer be farmed. The lumberjack now fells every vanilla sapling tree whole and never a build, and the
+> builder finds plots in hilly villages. Known open issues are listed under [Known issues](#known-issues).
 
 ## What works today (slice 1)
 
@@ -24,13 +25,20 @@ command it RTS-style.
   and a **builder**.
 - **Jobs survive absence:** workers are kept on a saved village roster, so a worker in an unloaded chunk is not
   replaced. A worker that dies, converts or changes dimension frees its job for a new hire.
-- **Lumberjack:** fells natural trees only (not player-built log structures), collects the drops, replants a
-  sapling, and hauls logs to the storehouse. A tree it cannot reach or is not allowed to cut is skipped for two
-  minutes.
+- **Lumberjack:** fells whole natural trees, including branched and 2×2 trees (dark oak, mega spruce, mega
+  jungle, acacia, cherry), top log first and the trunk base last, so no logs are left floating. It collects the
+  drops, replants a sapling, and hauls logs to the storehouse. A felling cut short (a reload, nightfall) is
+  finished later. A tree it cannot reach or is not allowed to cut is skipped for two minutes.
+- **Builds are safe from the lumberjack:** logs placed by players, citizens or other mods' block placers are
+  remembered, and pistons carry that memory along. A tree touching any remembered log, a tree inside a
+  generated structure (village houses), and logs resting on a man-made foundation are never felled. Trees grown
+  with bone meal count as natural.
 - **Builder:** once the storehouse holds a full blueprint's materials, claims a plot near the bell, withdraws the
-  materials, and builds `villagercity:blueprint/starter_house` (5×5×5 oak house) block by block. A plot whose
-  builder gives up is retried after two minutes and dropped after the third try; a plot whose builder dies or
-  leaves is taken over at once. A resumed plot needs only the materials for the missing blocks.
+  materials, and builds `villagercity:blueprint/starter_house` (5×5×5 oak house) block by block. Plots are flat
+  natural ground (no caves or overhangs) up to 48 blocks from the bell and 16 above or below it, that the builder
+  can walk to. A plot whose builder gives up is retried after two minutes and dropped after the third try, and a
+  dropped spot is never picked again; a plot whose builder dies or leaves is taken over at once. A resumed plot
+  needs only the materials for the missing blocks.
 - **Save-safe:** in-flight work is not saved; jobs re-plan from the world after a reload.
 
 Villagers still trade, sleep, panic, and react to raids as usual: the mod pauses its own work whenever vanilla
@@ -86,10 +94,12 @@ The first `runClient` or `build` downloads and decompiles Minecraft and takes se
 3. Make sure it has two **adult villagers without a profession** (not nitwits). Break a couple of
    workstations or use spawn eggs if every villager is employed.
 4. Run `/villagercity village` (op only) to see the nearest village's id, age, house count, storehouse
-   contents, and each citizen's job and current task.
-5. Villagers cannot craft yet, so stock the storehouse with the starter house materials: roughly 25 cobblestone,
-   57 oak planks, 12 oak logs, 2 glass, an oak door and a red bed (two of each is safe). The lumberjack supplies
-   more logs over time.
+   contents, and each citizen's job and current task. An idle citizen says what it waits for, for example
+   `task=idle (waiting for materials: oak_planks x57)` or `task=idle (waiting for a buildable plot near the
+   bell)`; `task=sleeping`, `task=trading` or `task=rest` mean vanilla has the villager for now.
+5. Villagers cannot craft yet, so stock the storehouse with the starter house materials: exactly 25 cobblestone,
+   57 oak planks, 12 oak logs, 2 glass, an oak door and a red bed. Only these exact items count (birch planks do
+   not). The lumberjack supplies more logs over time, of whatever trees grow nearby.
 6. Watch the builder claim a plot and build; `/villagercity village` shows the house count go up when it
    finishes. Villagers work only during the day.
 
@@ -103,6 +113,15 @@ into `~/.minecraft/mods/`.
 - Villagers with nothing to do stand still instead of returning to their vanilla routine.
 - A plot the builder gives up on three times is left as a partial ruin, and the next house again needs a full
   set of materials.
+- The starter house needs oak specifically; villages among birch or spruce need the player to bring oak.
+- Lumberjack limits:
+  - log builds placed before the mod was installed, or with commands, are protected only by their shape
+    (foundation, structure pieces);
+  - a row of 1×1 trees with no gap between the trunks is never felled;
+  - a tree whose branch rests on a man-made block is never felled;
+  - mangroves are not felled, and a 2×2 tree is replanted with a single sapling;
+  - felling a tree in a dense grove can take branch logs from its neighbours;
+  - drops from the top of a very tall tree can land out of pickup range.
 
 ## Project layout
 
