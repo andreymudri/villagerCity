@@ -126,6 +126,23 @@ public final class CraftPlannerTests {
     }
 
     @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void recipesWithACraftingRemainderAreSkipped(GameTestHelper helper) {
+        RecipeManager recipes = helper.getLevel().getRecipeManager();
+        HolderLookup.Provider registries = helper.getLevel().registryAccess();
+        Map<Item, Long> stock = Map.of(Items.MILK_BUCKET, 3L, Items.SUGAR, 2L, Items.EGG, 1L, Items.WHEAT, 3L);
+        List<Map.Entry<Item, Integer>> orders = List.of(Map.entry(Items.CAKE, 1));
+
+        CraftPlanner.Result result = CraftPlanner.plan(recipes, registries, stock, orders, Map.of());
+
+        // The only vanilla cake recipe uses 3 milk buckets, which leave a crafting remainder (an empty bucket) the
+        // planner does not account for, so it must be skipped entirely rather than planned as if the buckets were
+        // consumed for free.
+        helper.assertTrue(result.unmet().containsKey(Items.CAKE), "cake should be unmet, unmet " + result.unmet());
+        helper.assertTrue(result.steps().isEmpty(), "no steps should be planned for a remainder-only recipe, got " + result.steps());
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
     public static void anUnmeetableOrderNamesItsBase(GameTestHelper helper) {
         RecipeManager recipes = helper.getLevel().getRecipeManager();
         HolderLookup.Provider registries = helper.getLevel().registryAccess();
