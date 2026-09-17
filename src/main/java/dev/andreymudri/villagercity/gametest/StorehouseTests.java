@@ -10,6 +10,14 @@ import dev.andreymudri.villagercity.village.VillageData;
 import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
+import net.neoforged.neoforge.items.ItemHandlerHelper;
+import net.neoforged.neoforge.items.IItemHandler;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.minecraft.world.ContainerHelper;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.core.Direction;
+import net.minecraft.core.NonNullList;
+import net.minecraft.core.HolderLookup;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -39,8 +47,8 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 @PrefixGameTestTemplate(false)
 public final class StorehouseTests {
     private static final BlockPos STORE = new BlockPos(20, 1, 24);
-    /** Menu slot of player hotbar slot 0: after the 27 storehouse slots and the 27 main inventory slots. */
-    private static final int HOTBAR_0 = StorehouseBlockEntity.SIZE + 27;
+    /** Menu slot of player hotbar slot 0: the menu holds only the player's inventory, main inventory first. */
+    private static final int HOTBAR_0 = StorehouseMenu.HOTBAR_START;
 
     private static StorehouseBlockEntity place(GameTestHelper helper) {
         helper.setBlock(STORE, StorehouseContent.BLOCK.get());
@@ -91,10 +99,10 @@ public final class StorehouseTests {
         Player player = helper.makeMockPlayer(GameType.SURVIVAL);
         StorehouseMenu menu = new StorehouseMenu(1, player.getInventory(), storehouse);
 
-        menu.clicked(0, 0, ClickType.QUICK_MOVE, player);
+        menu.act(player, new ItemStack(Items.OAK_LOG), StorehouseMenu.Button.SHIFT);
         int withdrawn = player.getInventory().countItem(Items.OAK_LOG);
         int playerSlot = -1;
-        for (int i = StorehouseBlockEntity.SIZE; i < menu.slots.size(); i++) {
+        for (int i = 0; i < menu.slots.size(); i++) {
             if (menu.getSlot(i).getItem().is(Items.OAK_LOG)) {
                 playerSlot = i;
             }
@@ -121,10 +129,10 @@ public final class StorehouseTests {
         Player player = helper.makeMockPlayer(GameType.SURVIVAL);
         StorehouseMenu menu = new StorehouseMenu(1, player.getInventory(), storehouse);
 
-        menu.clicked(0, 0, ClickType.QUICK_MOVE, player);
+        menu.act(player, new ItemStack(Items.OAK_LOG), StorehouseMenu.Button.SHIFT);
         long debtAfterWithdraw = village.debt(player.getUUID());
         int playerSlot = -1;
-        for (int i = StorehouseBlockEntity.SIZE; i < menu.slots.size(); i++) {
+        for (int i = 0; i < menu.slots.size(); i++) {
             if (menu.getSlot(i).getItem().is(Items.OAK_LOG)) {
                 playerSlot = i;
             }
@@ -170,7 +178,7 @@ public final class StorehouseTests {
         StorehouseMenu menuB = new StorehouseMenu(2, b.getInventory(), storehouse);
 
         menuA.clicked(HOTBAR_0, 0, ClickType.QUICK_MOVE, a);
-        storehouse.setItem(26, new ItemStack(Items.COBBLESTONE, 7));
+        storehouse.insertFromCitizen(new ItemStack(Items.COBBLESTONE, 7));
         menuB.removed(b);
         menuA.removed(a);
 
@@ -189,8 +197,8 @@ public final class StorehouseTests {
         ItemStack plain = new ItemStack(Items.OAK_LOG);
         ItemStack named = new ItemStack(Items.OAK_LOG);
         named.set(DataComponents.CUSTOM_NAME, Component.literal("Heirloom"));
-        storehouse.setItem(0, plain.copy());
-        storehouse.setItem(1, named.copy());
+        storehouse.insertFromCitizen(plain.copy());
+        storehouse.insertFromCitizen(named.copy());
 
         ItemStack taken = storehouse.extractForCitizen(Items.OAK_LOG, 2);
 
@@ -199,8 +207,7 @@ public final class StorehouseTests {
         boolean tookNamed = ItemStack.isSameItemSameComponents(taken, named);
         helper.assertTrue(tookPlain != tookNamed, "taken stack matches neither or both originals");
         ItemStack other = tookPlain ? named : plain;
-        boolean otherStayed = ItemStack.isSameItemSameComponents(storehouse.getItem(0), other)
-                || ItemStack.isSameItemSameComponents(storehouse.getItem(1), other);
+        boolean otherStayed = storehouse.entries().stream().anyMatch(entry -> ItemStack.isSameItemSameComponents(entry.prototype(), other));
         helper.assertTrue(otherStayed && storehouse.count(Items.OAK_LOG) == 1, "the other log did not stay in the storehouse");
         helper.succeed();
     }
@@ -309,5 +316,123 @@ public final class StorehouseTests {
         storehouse.insertFromCitizen(new ItemStack(Items.OAK_LOG, 7));
         helper.getLevel().destroyBlock(helper.absolutePos(STORE), false);
         helper.succeedWhen(() -> helper.assertEntityPresent(EntityType.ITEM, STORE, 2.0));
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void storesFarMoreThanAChestAndKeepsItThroughASave(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        StorehouseBlockEntity storehouse = place(helper);
+        ItemStack named = new ItemStack(Items.OAK_LOG);
+        named.set(DataComponents.CUSTOM_NAME, Component.literal("Heirloom"));
+        storehouse.insert(new ItemStack(Items.OAK_LOG), 100_000L);
+        storehouse.insert(new ItemStack(Items.COBBLESTONE), 5_000_000_000L);
+        storehouse.insertFromCitizen(named.copyWithCount(3));
+        HolderLookup.Provider registries = helper.getLevel().registryAccess();
+
+        CompoundTag saved = storehouse.saveWithoutMetadata(registries);
+        StorehouseBlockEntity loaded = new StorehouseBlockEntity(storehouse.getBlockPos(), storehouse.getBlockState());
+        loaded.loadWithComponents(saved, registries);
+
+        helper.assertTrue(loaded.entries().size() == 3, "entries " + loaded.entries());
+        helper.assertTrue(loaded.count(Items.OAK_LOG) == 100_003L, "logs " + loaded.count(Items.OAK_LOG));
+        helper.assertTrue(loaded.count(Items.COBBLESTONE) == 5_000_000_000L, "cobblestone " + loaded.count(Items.COBBLESTONE));
+        helper.assertTrue(loaded.entries().stream().anyMatch(entry -> ItemStack.isSameItemSameComponents(entry.prototype(), named) && entry.count() == 3),
+                "the named logs lost their name or count");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void anOldSlotStorehouseLoadsIntoEntries(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        StorehouseBlockEntity storehouse = place(helper);
+        HolderLookup.Provider registries = helper.getLevel().registryAccess();
+        NonNullList<ItemStack> slots = NonNullList.withSize(StorehouseBlockEntity.LEGACY_SIZE, ItemStack.EMPTY);
+        slots.set(0, new ItemStack(Items.OAK_LOG, 64));
+        slots.set(5, new ItemStack(Items.OAK_LOG, 10));
+        slots.set(26, new ItemStack(Items.GLASS, 2));
+        CompoundTag old = new CompoundTag();
+        ContainerHelper.saveAllItems(old, slots, registries);
+
+        storehouse.loadWithComponents(old, registries);
+
+        helper.assertTrue(storehouse.entries().size() == 2, "entries " + storehouse.entries());
+        helper.assertTrue(storehouse.count(Items.OAK_LOG) == 74 && storehouse.count(Items.GLASS) == 2, "counts " + storehouse.counts());
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_storehouse_actions")
+    public static void gridClicksTakeAndStoreAndSettleDebt(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 12, false);
+        StorehouseBlockEntity storehouse = place(helper);
+        village.setStorehousePos(helper.absolutePos(STORE));
+        storehouse.insertFromCitizen(new ItemStack(Items.OAK_LOG, 200));
+        Player player = helper.makeMockPlayer(GameType.SURVIVAL);
+        StorehouseMenu menu = new StorehouseMenu(1, player.getInventory(), storehouse);
+        ItemStack log = new ItemStack(Items.OAK_LOG);
+        UUID id = player.getUUID();
+
+        menu.act(player, log, StorehouseMenu.Button.LEFT);
+        boolean tookStack = menu.getCarried().getCount() == 64 && storehouse.count(Items.OAK_LOG) == 136 && village.debt(id) == 64;
+        menu.act(player, ItemStack.EMPTY, StorehouseMenu.Button.RIGHT);
+        boolean storedOne = menu.getCarried().getCount() == 63 && storehouse.count(Items.OAK_LOG) == 137 && village.debt(id) == 63;
+        menu.act(player, ItemStack.EMPTY, StorehouseMenu.Button.LEFT);
+        boolean storedAll = menu.getCarried().isEmpty() && storehouse.count(Items.OAK_LOG) == 200 && village.debt(id) == 0;
+        menu.act(player, log, StorehouseMenu.Button.RIGHT);
+        boolean tookHalf = menu.getCarried().getCount() == 32 && storehouse.count(Items.OAK_LOG) == 168;
+        menu.getCarried().setCount(0);
+        menu.setCarried(ItemStack.EMPTY);
+        menu.act(player, log, StorehouseMenu.Button.SHIFT);
+        boolean tookAll = player.getInventory().countItem(Items.OAK_LOG) == 168 && storehouse.count(Items.OAK_LOG) == 0 && village.debt(id) == 200;
+        player.getInventory().setItem(0, new ItemStack(Items.OAK_LOG, 50));
+        menu.clicked(HOTBAR_0, 0, ClickType.QUICK_MOVE, player);
+        boolean quickStored = storehouse.count(Items.OAK_LOG) == 50 && village.debt(id) == 150;
+
+        long credited = village.ledger().total(id, ContributionCategory.DEPOSIT);
+        VillageTestSupport.remove(helper, village);
+        helper.assertTrue(tookStack, "left click did not take a stack: carried " + menu.getCarried());
+        helper.assertTrue(storedOne, "right click with a stack did not store one");
+        helper.assertTrue(storedAll, "left click with a stack did not store it");
+        helper.assertTrue(tookHalf, "right click did not take half a stack");
+        helper.assertTrue(tookAll, "shift click did not fill the inventory: " + player.getInventory().countItem(Items.OAK_LOG));
+        helper.assertTrue(quickStored, "shift click on an inventory slot did not store the stack");
+        helper.assertTrue(credited == 0, "credited " + credited + " for moving the storehouse's own logs around");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_storehouse_full_inventory")
+    public static void shiftTakingIntoAFullInventoryKeepsTheRest(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        StorehouseBlockEntity storehouse = place(helper);
+        storehouse.insertFromCitizen(new ItemStack(Items.OAK_LOG, 100));
+        Player player = helper.makeMockPlayer(GameType.SURVIVAL);
+        for (int i = 0; i < 36; i++) {
+            player.getInventory().setItem(i, new ItemStack(Items.DIRT, 64));
+        }
+        player.getInventory().setItem(3, new ItemStack(Items.OAK_LOG, 60));
+        StorehouseMenu menu = new StorehouseMenu(1, player.getInventory(), storehouse);
+
+        menu.act(player, new ItemStack(Items.OAK_LOG), StorehouseMenu.Button.SHIFT);
+
+        helper.assertTrue(player.getInventory().countItem(Items.OAK_LOG) == 64, "inventory logs " + player.getInventory().countItem(Items.OAK_LOG));
+        helper.assertTrue(storehouse.count(Items.OAK_LOG) == 96, "storehouse logs " + storehouse.count(Items.OAK_LOG));
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void itemPipesInsertAnyAmountButExtractNothing(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        StorehouseBlockEntity storehouse = place(helper);
+        IItemHandler handler = helper.getLevel().getCapability(Capabilities.ItemHandler.BLOCK, helper.absolutePos(STORE), Direction.UP);
+        helper.assertTrue(handler != null, "no item handler");
+        for (int i = 0; i < 40; i++) {
+            ItemStack rest = ItemHandlerHelper.insertItemStacked(handler, new ItemStack(i % 2 == 0 ? Items.OAK_LOG : Items.COBBLESTONE, 64), false);
+            helper.assertTrue(rest.isEmpty(), "pipe insert " + i + " rejected " + rest);
+        }
+        for (int slot = 0; slot < handler.getSlots(); slot++) {
+            helper.assertTrue(handler.extractItem(slot, 64, false).isEmpty(), "pipe extracted from slot " + slot);
+        }
+        helper.assertTrue(storehouse.count(Items.OAK_LOG) == 20 * 64 && storehouse.count(Items.COBBLESTONE) == 20 * 64, "counts " + storehouse.counts());
+        helper.succeed();
     }
 }

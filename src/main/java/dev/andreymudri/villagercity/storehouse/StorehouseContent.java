@@ -2,6 +2,7 @@ package dev.andreymudri.villagercity.storehouse;
 
 import dev.andreymudri.villagercity.VillagerCity;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
@@ -10,6 +11,10 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.capabilities.RegisterCapabilitiesEvent;
+import net.neoforged.neoforge.common.extensions.IMenuTypeExtension;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.RegisterEvent;
 
@@ -21,6 +26,8 @@ public final class StorehouseContent {
             DeferredHolder.create(Registries.ITEM, VillagerCity.id("storehouse"));
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<StorehouseBlockEntity>> BLOCK_ENTITY =
             DeferredHolder.create(Registries.BLOCK_ENTITY_TYPE, VillagerCity.id("storehouse"));
+    public static final DeferredHolder<MenuType<?>, MenuType<StorehouseMenu>> MENU =
+            DeferredHolder.create(Registries.MENU, VillagerCity.id("storehouse"));
 
     private StorehouseContent() {
     }
@@ -33,5 +40,19 @@ public final class StorehouseContent {
                 () -> new BlockItem(BLOCK.get(), new Item.Properties()));
         event.register(Registries.BLOCK_ENTITY_TYPE, VillagerCity.id("storehouse"),
                 () -> BlockEntityType.Builder.of(StorehouseBlockEntity::new, BLOCK.get()).build(null));
+        event.register(Registries.MENU, VillagerCity.id("storehouse"),
+                () -> IMenuTypeExtension.create((containerId, inventory, data) -> new StorehouseMenu(containerId, inventory)));
+    }
+
+    @SubscribeEvent
+    public static void onRegisterCapabilities(RegisterCapabilitiesEvent event) {
+        event.registerBlockEntity(Capabilities.ItemHandler.BLOCK, BLOCK_ENTITY.get(), (storehouse, side) -> storehouse.itemHandler());
+    }
+
+    @SubscribeEvent
+    public static void onRegisterPayloads(RegisterPayloadHandlersEvent event) {
+        event.registrar("1")
+                .playToClient(StorehouseContentsPayload.TYPE, StorehouseContentsPayload.STREAM_CODEC, StorehouseContentsPayload::handle)
+                .playToServer(StorehouseActionPayload.TYPE, StorehouseActionPayload.STREAM_CODEC, StorehouseActionPayload::handle);
     }
 }

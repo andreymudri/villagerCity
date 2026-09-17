@@ -1,4 +1,5 @@
 {
   "block.villagercity.storehouse": "Storehouse",
-  "container.villagercity.storehouse": "Storehouse"
+  "container.villagercity.storehouse": "Storehouse",
+  "container.villagercity.storehouse.stored": "Stored: %s"
 }
