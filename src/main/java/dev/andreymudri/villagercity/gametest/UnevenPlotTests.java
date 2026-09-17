@@ -8,6 +8,7 @@ import dev.andreymudri.villagercity.citizen.JobType;
 import dev.andreymudri.villagercity.citizen.TaskScheduler;
 import dev.andreymudri.villagercity.job.BuilderJob;
 import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
+import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
@@ -102,6 +103,30 @@ public final class UnevenPlotTests {
     /** Whether a test-relative origin lies on the plateau {@link #plateauAbove} raises, margin included. */
     private static boolean onTheShelf(BlockPos origin) {
         return origin.getX() >= 31 && origin.getX() <= 39 && origin.getZ() >= 31 && origin.getZ() <= 39;
+    }
+
+    /** Chebyshev distance between two plot corners, which is also the distance between their centres for one size. */
+    private static int chebyshev(BlockPos a, BlockPos b) {
+        return Math.max(Math.abs(a.getX() - b.getX()), Math.abs(a.getZ() - b.getZ()));
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_anchored_search")
+    public static void theSearchGrowsFromWhatTheVillageBuilt(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 4);
+        // Flat ground everywhere: every spot within reach is equally buildable, so only the order decides.
+        BlockPos bellFirst = relative(helper, PlotPlanner.find(helper.getLevel(), village, HOUSE).orElseThrow(() -> new AssertionError("no plot found")));
+        helper.assertTrue(bellFirst.equals(new BlockPos(18, 1, 18)), "a village with nothing built did not start at the bell: " + bellFirst);
+
+        BlockPos house = new BlockPos(38, 1, 38);
+        village.addHouse(new BuildingRecord("minecraft:home", helper.absolutePos(house), HOUSE));
+        village.setRadius(4);
+        BlockPos origin = relative(helper, PlotPlanner.find(helper.getLevel(), village, HOUSE).orElseThrow(() -> new AssertionError("no plot found beside the house")));
+        int toHouse = chebyshev(origin, house);
+        int toBell = chebyshev(origin, BELL);
+        helper.assertTrue(toHouse <= 8, "planned " + toHouse + " blocks from the house the village should grow beside, at " + origin);
+        helper.assertTrue(toBell > toHouse, "planned nearer the bell (" + toBell + ") than the house (" + toHouse + "), at " + origin);
+        helper.succeed();
     }
 
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_vertical_reach", timeoutTicks = 400)
