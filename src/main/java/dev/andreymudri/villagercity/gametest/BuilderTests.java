@@ -196,7 +196,7 @@ public final class BuilderTests {
         });
     }
 
-    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_builder_search_backoff", timeoutTicks = 600)
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_builder_search_backoff", timeoutTicks = 1200)
     public static void buildersShareTheWaitAfterAFailedPlotSearch(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
@@ -204,13 +204,55 @@ public final class BuilderTests {
         stockedStorehouse(helper, village, blueprint, 1);
         ServerLevel level = helper.getLevel();
         // A search just failed for this village: no builder may search again before the wait is over.
-        long until = level.getGameTime() + BuilderJob.PLOT_SEARCH_RETRY_TICKS;
+        long until = level.getGameTime() + 3 * BuilderJob.PLOT_SEARCH_RETRY_TICKS;
         village.setNextPlotSearch(until);
         Villager villager = GameTestSupport.spawnVillager(helper, 22, 1, 20);
         CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
+        long[] claimedAt = {-1};
         helper.succeedWhen(() -> {
+            if (claimedAt[0] < 0 && !village.plots().isEmpty()) {
+                claimedAt[0] = level.getGameTime();
+            }
             helper.assertTrue(village.plots().size() == 1, "no plot claimed");
-            helper.assertTrue(level.getGameTime() >= until, "plot claimed during the village's wait");
+            helper.assertTrue(claimedAt[0] >= until, "plot claimed " + (until - claimedAt[0]) + " ticks before the village's wait ended");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_builder_many_unreachable", timeoutTicks = 2400)
+    public static void unreachableSpotsDoNotHideAReachableOne(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // Path-covered floor (never buildable) with two sheer grass-topped mesas next to the bell, whose tops give more
+        // buildable spots than one search may check, and one reachable grass patch far away.
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                helper.setBlock(x, 0, z, Blocks.DIRT_PATH);
+            }
+        }
+        for (int[] mesa : new int[][] {{15, 14}, {26, 14}}) {
+            for (int x = mesa[0]; x < mesa[0] + 9; x++) {
+                for (int z = mesa[1]; z < mesa[1] + 9; z++) {
+                    for (int y = 1; y <= 8; y++) {
+                        helper.setBlock(x, y, z, y == 8 ? Blocks.GRASS_BLOCK : Blocks.DIRT);
+                    }
+                }
+            }
+        }
+        for (int x = 36; x <= 44; x++) {
+            for (int z = 36; z <= 44; z++) {
+                helper.setBlock(x, 0, z, Blocks.GRASS_BLOCK);
+            }
+        }
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        stockedStorehouse(helper, village, blueprint, 1);
+        Villager villager = GameTestSupport.spawnVillager(helper, 24, 1, 27);
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.plots().size() == 1, "no plot claimed; waiting for "
+                    + villager.getData(CitizenAttachments.RUNTIME).activeJob().waitingFor());
+            BlockPos origin = village.plots().get(0).origin().subtract(helper.absolutePos(BlockPos.ZERO));
+            helper.assertTrue(origin.getY() == 1 && origin.getX() >= 36 && origin.getZ() >= 36, "claimed an unreachable spot at " + origin);
             VillageTestSupport.remove(helper, village);
         });
     }
