@@ -412,6 +412,25 @@ public final class TreeIdentityTests {
         helper.succeed();
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_identity_spread")
+    public static void branchLogsFartherThanSixFromTheTrunkAreNotPartOfTheTree(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        BlockPos base = new BlockPos(10, 1, 20);
+        for (int y = 0; y < 5; y++) {
+            helper.setBlock(base.above(y), Blocks.OAK_LOG);
+        }
+        canopy(helper, base.above(4));
+        for (int x = 1; x <= 9; x++) {
+            helper.setBlock(base.offset(x, 5, 0), Blocks.OAK_LOG);
+        }
+        Optional<TreeFinder.Tree> tree = TreeFinder.trunk(level, helper.absolutePos(base));
+        helper.assertTrue(tree.isPresent(), "tree with a long branch rejected");
+        int farthest = tree.get().logs().stream().mapToInt(pos -> Math.abs(pos.getX() - helper.absolutePos(base).getX())).max().orElse(0);
+        helper.assertTrue(farthest == TreeFinder.MAX_SPREAD, "branch walked " + farthest + " blocks out, expected " + TreeFinder.MAX_SPREAD);
+        helper.succeed();
+    }
+
     /** Natural oak leaves in a 3x3 around and above the top log. */
     private static void canopy(GameTestHelper helper, BlockPos top) {
         for (int dx = -1; dx <= 1; dx++) {
