@@ -17,8 +17,10 @@ import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.boss.wither.WitherBoss;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.ClickType;
@@ -28,6 +30,8 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.HopperBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.common.CommonHooks;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -283,6 +287,18 @@ public final class StorehouseTests {
         helper.getLevel().explode(null, abs.getX() + 2.5, abs.getY() + 0.5, abs.getZ() + 0.5, 4.0f, Level.ExplosionInteraction.TNT);
 
         helper.assertBlockPresent(StorehouseContent.BLOCK.get(), store);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void bossesCannotBreakStorehouse(GameTestHelper helper) {
+        place(helper);
+        BlockState state = StorehouseContent.BLOCK.get().defaultBlockState();
+        WitherBoss wither = EntityType.WITHER.create(helper.getLevel());
+
+        helper.assertTrue(state.is(BlockTags.WITHER_IMMUNE), "storehouse is not wither immune");
+        helper.assertTrue(state.is(BlockTags.DRAGON_IMMUNE), "storehouse is not dragon immune");
+        helper.assertFalse(CommonHooks.canEntityDestroy(helper.getLevel(), helper.absolutePos(STORE), wither), "a wither may destroy the storehouse");
         helper.succeed();
     }
 
