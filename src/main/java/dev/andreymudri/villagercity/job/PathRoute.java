@@ -82,7 +82,7 @@ public final class PathRoute {
         if (!startGround.present()) {
             return Optional.empty();
         }
-        if (blocked(level, start) || blocked(level, start.above())) {
+        if (blocked(level, start) || blocked(level, start.above()) || supportBlocked(level, start.below())) {
             return Optional.empty();
         }
         List<Footprint> occupied = village.occupiedFootprints();
@@ -125,7 +125,7 @@ public final class PathRoute {
                 int maxH = Math.min(node.state.h() + 1, ground.y() + MAX_ABOVE_GROUND);
                 for (int h = minH; h <= maxH; h++) {
                     BlockPos surface = new BlockPos(nx, h, nz);
-                    if (blocked(level, surface) || blocked(level, surface.above())) {
+                    if (blocked(level, surface) || blocked(level, surface.above()) || supportBlocked(level, surface.below())) {
                         continue;
                     }
                     boolean bridge = ground.fluid() || h - ground.y() > MAX_ABOVE_GROUND;
@@ -210,6 +210,20 @@ public final class PathRoute {
     private static boolean blocked(ServerLevel level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         return !DigStep.isDiggable(level, pos) && !state.canBeReplaced();
+    }
+
+    /**
+     * A cell's support blocks the route only if it is a foreign object: not open ground a RAISED or BRIDGE cell
+     * would place its own support into, not what building has already put there (dirt still to pave, a finished
+     * dirt path, or a bridge's oak planks), and not natural ground a CUT simply leaves exposed. Without this, a
+     * block dropped on a support cell after its route was cached (a player's block, say) has the same {@code
+     * groundAt} height and passes every other check, so a route recomputed around it lands right back on it and
+     * {@code planCell} is asked to build over something it never should.
+     */
+    private static boolean supportBlocked(ServerLevel level, BlockPos support) {
+        BlockState state = level.getBlockState(support);
+        return !state.canBeReplaced() && !state.is(BlockTags.DIRT) && !state.is(Blocks.DIRT_PATH)
+                && !state.is(Blocks.OAK_PLANKS) && !DigStep.isDiggable(level, support);
     }
 
     /**

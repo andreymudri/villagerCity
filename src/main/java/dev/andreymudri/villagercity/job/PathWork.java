@@ -6,6 +6,7 @@ import dev.andreymudri.villagercity.citizen.Job;
 import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
 import dev.andreymudri.villagercity.citizen.TaskSequence;
+import dev.andreymudri.villagercity.citizen.WorldPermissions;
 import dev.andreymudri.villagercity.citizen.task.BreakBlock;
 import dev.andreymudri.villagercity.citizen.task.DigStep;
 import dev.andreymudri.villagercity.citizen.task.MoveTo;
@@ -18,9 +19,12 @@ import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageRegistry;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -59,9 +63,13 @@ public final class PathWork implements Job {
     /** How far (horizontally) a villager steps aside when it is standing where a support block must go. */
     public static final int STAND_ASIDE_DISTANCE = 2;
     public static final double STAND_ASIDE_REACH = 0.9;
+    /** How far the paver must walk from a door it opened before {@link #closeDistantDoors} shuts it again. */
+    public static final double DOOR_CLOSE_DISTANCE = 6.0;
 
     private final Map<BlockPos, List<PathRoute.Cell>> routes = new HashMap<>();
     private final Map<BlockPos, Integer> failures = new HashMap<>();
+    /** Doors this job opened itself, closed again once the paver has walked well clear of them. */
+    private final Set<BlockPos> openedDoors = new HashSet<>();
     private @Nullable BlockPos current;
     private boolean building;
     private @Nullable String waitingFor;
@@ -78,6 +86,7 @@ public final class PathWork implements Job {
         current = null;
         ServerLevel level = ctx.level();
         VillageData village = ctx.village();
+        closeDistantDoors(ctx);
         List<BlockPos> queue = village.pathQueue();
         if (queue.isEmpty()) {
             return null;
@@ -92,7 +101,7 @@ public final class PathWork implements Job {
         }
         List<PathRoute.Cell> route = routes.get(origin);
         if (route == null) {
-            Optional<List<PathRoute.Cell>> found = doorOutside(level, ctx.villager(), house.get())
+            Optional<List<PathRoute.Cell>> found = doorOutside(ctx, house.get())
                     .flatMap(start -> PathRoute.find(level, village, start, village.center()));
             if (found.isEmpty()) {
                 VillagerCity.LOGGER.info("no route from the house at {} to the bell", origin);
@@ -295,8 +304,15 @@ public final class PathWork implements Job {
      * the door if it is shut: our task-based navigation drives {@link net.minecraft.world.entity.ai.navigation.PathNavigation}
      * directly, without the brain memory ({@code MemoryModuleType.PATH}) that vanilla's own door-opening behaviour
      * ({@code InteractWithDoor}) needs, so a shut door in the route is never opened on its own and blocks the paver.
+     * Never opens a door the villager could not open itself (an iron door, say): the house's path is skipped instead,
+     * with a logged reason, the same way a house with no route to the bell is. When {@link WorldPermissions#mayGrief}
+     * refuses, the door is left shut but the start position is still returned: the route itself never runs through
+     * the door (only alongside it), so the paver can still lay a path without ever opening it. A door this method
+     * does open is recorded in {@link #openedDoors} and shut again by {@link #closeDistantDoors}.
      */
-    private static Optional<BlockPos> doorOutside(ServerLevel level, Villager villager, BuildingRecord house) {
+    private Optional<BlockPos> doorOutside(TaskContext ctx, BuildingRecord house) {
+        ServerLevel level = ctx.level();
+        Villager villager = ctx.villager();
         Footprint footprint = house.footprint();
         int doorY = house.origin().getY() + 1;
         for (int x = footprint.minX(); x <= footprint.maxX(); x++) {
@@ -306,7 +322,15 @@ public final class PathWork implements Job {
                 if (state.getBlock() instanceof DoorBlock doorBlock && state.hasProperty(BlockStateProperties.DOUBLE_BLOCK_HALF)
                         && state.getValue(BlockStateProperties.DOUBLE_BLOCK_HALF) == DoubleBlockHalf.LOWER) {
                     if (!doorBlock.isOpen(state)) {
-                        doorBlock.setOpen(villager, level, state, pos, true);
+                        if (!state.is(BlockTags.WOODEN_DOORS)) {
+                            VillagerCity.LOGGER.info("the door at {} is not one the paver could open itself; skipping the path from {} to the bell",
+                                    pos, house.origin());
+                            return Optional.empty();
+                        }
+                        if (WorldPermissions.mayGrief(level, villager)) {
+                            doorBlock.setOpen(villager, level, state, pos, true);
+                            openedDoors.add(pos.immutable());
+                        }
                     }
                     Direction facing = state.getValue(DoorBlock.FACING);
                     BlockPos towardFacing = pos.relative(facing);
@@ -316,6 +340,27 @@ public final class PathWork implements Job {
             }
         }
         return Optional.empty();
+    }
+
+    /** Shuts every door this job opened, once the paver has walked {@link #DOOR_CLOSE_DISTANCE} clear of it. */
+    private void closeDistantDoors(TaskContext ctx) {
+        if (openedDoors.isEmpty()) {
+            return;
+        }
+        ServerLevel level = ctx.level();
+        Villager villager = ctx.villager();
+        Iterator<BlockPos> it = openedDoors.iterator();
+        while (it.hasNext()) {
+            BlockPos pos = it.next();
+            if (villager.distanceToSqr(Vec3.atCenterOf(pos)) < DOOR_CLOSE_DISTANCE * DOOR_CLOSE_DISTANCE) {
+                continue;
+            }
+            BlockState state = level.getBlockState(pos);
+            if (state.getBlock() instanceof DoorBlock doorBlock && doorBlock.isOpen(state) && WorldPermissions.mayGrief(level, villager)) {
+                doorBlock.setOpen(villager, level, state, pos, false);
+            }
+            it.remove();
+        }
     }
 
     /**
