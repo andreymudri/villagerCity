@@ -4,6 +4,7 @@ import com.mojang.serialization.JsonOps;
 import dev.andreymudri.villagercity.VillagerCity;
 import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.ContributionCategory;
+import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageCodecs;
 import dev.andreymudri.villagercity.village.VillageData;
@@ -81,6 +82,45 @@ public final class VillageRegistryTests {
         tag.remove("prepared");
         Plot legacy = VillageCodecs.PLOT.parse(NbtOps.INSTANCE, tag).getOrThrow();
         helper.assertTrue(legacy.prepared(), "plot saved before the prepared flag decoded as unprepared");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void plotCopiesKeepThePreparedFlag(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        UUID plotId = UUID.randomUUID();
+        UUID builder = UUID.randomUUID();
+        village.addPlot(new Plot(plotId, "villagercity:blueprint/starter_house", helper.absolutePos(new BlockPos(30, 1, 30)), new Vec3i(5, 5, 5), null, 0L, 0, false));
+        village.assignPlot(plotId, builder);
+        helper.assertTrue(!village.plots().get(0).prepared(), "assignPlot prepared the plot: " + village.plots());
+        village.releasePlot(plotId, 100L, true);
+        helper.assertTrue(!village.plots().get(0).prepared(), "releasePlot prepared the plot: " + village.plots());
+        village.assignPlot(plotId, builder);
+        helper.assertTrue(!village.plots().get(0).prepared(), "second assignPlot prepared the plot: " + village.plots());
+        helper.assertTrue(village.releasePlotsBuiltBy(builder), "releasePlotsBuiltBy released nothing: " + village.plots());
+        helper.assertTrue(!village.plots().get(0).prepared(), "releasePlotsBuiltBy prepared the plot: " + village.plots());
+        village.markPlotPrepared(plotId);
+        helper.assertTrue(village.plots().get(0).prepared(), "markPlotPrepared left the plot unprepared: " + village.plots());
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void workshopBlocksCountAsOccupied(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        BlockPos table = helper.absolutePos(new BlockPos(19, 1, 22));
+        BlockPos furnace = helper.absolutePos(new BlockPos(19, 1, 26));
+        Footprint tableFootprint = Footprint.of(table, new Vec3i(1, 1, 1));
+        Footprint furnaceFootprint = Footprint.of(furnace, new Vec3i(1, 1, 1));
+        helper.assertTrue(!village.occupiedFootprints().contains(tableFootprint) && !village.occupiedFootprints().contains(furnaceFootprint),
+                "workshop footprints occupied before the workshop was set: " + village.occupiedFootprints());
+        village.setCraftingTablePos(table);
+        village.setFurnacePos(furnace);
+        helper.assertTrue(village.occupiedFootprints().contains(tableFootprint), "crafting table not occupied: " + village.occupiedFootprints());
+        helper.assertTrue(village.occupiedFootprints().contains(furnaceFootprint), "furnace not occupied: " + village.occupiedFootprints());
+        village.setCraftingTablePos(null);
+        village.setFurnacePos(null);
+        helper.assertTrue(!village.occupiedFootprints().contains(tableFootprint) && !village.occupiedFootprints().contains(furnaceFootprint),
+                "workshop footprints still occupied after clearing the workshop: " + village.occupiedFootprints());
         helper.succeed();
     }
 
