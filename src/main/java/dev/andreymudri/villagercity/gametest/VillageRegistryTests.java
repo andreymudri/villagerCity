@@ -40,6 +40,8 @@ public final class VillageRegistryTests {
         village.ledger().record(UUID.randomUUID(), ContributionCategory.DEPOSIT, 42);
         BlockPos felling = helper.absolutePos(new BlockPos(10, 1, 30));
         village.startFelling(felling);
+        BlockPos failedPlot = helper.absolutePos(new BlockPos(12, 1, 12));
+        village.markPlotFailed(failedPlot);
 
         VillageRegistry registry = VillageRegistry.get(helper.getLevel());
         CompoundTag saved = registry.save(new CompoundTag(), helper.getLevel().registryAccess());
@@ -47,6 +49,7 @@ public final class VillageRegistryTests {
         VillageData copy = loaded.get(village.id());
         helper.assertTrue(copy != null, "village lost on reload");
         helper.assertTrue(copy.isFelling(felling), "remembered felling lost on reload");
+        helper.assertTrue(copy.isFailedPlot(failedPlot), "failed plot lost on reload");
         String before = VillageCodecs.VILLAGE.encodeStart(JsonOps.INSTANCE, village).getOrThrow().toString();
         String after = VillageCodecs.VILLAGE.encodeStart(JsonOps.INSTANCE, copy).getOrThrow().toString();
         helper.assertTrue(before.equals(after), "round trip changed data:\n" + before + "\n" + after);

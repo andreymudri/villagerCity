@@ -9,6 +9,7 @@ import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.storehouse.StorehouseContent;
 import dev.andreymudri.villagercity.village.VillageData;
 import java.util.List;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -59,7 +60,7 @@ public final class VillageCommandTests {
         CitizenTestSupport.enroll(sleeper, village, JobType.BUILDER, ItemStack.EMPTY, new ScriptedJob());
         sleeper.startSleeping(helper.absolutePos(new BlockPos(26, 1, 26)));
         String asleep = String.join("\n", VillageCommand.describe(helper.getLevel(), village));
-        helper.assertTrue(asleep.contains("citizen " + sleeper.getUUID() + " job=builder task=resting"), "sleeping citizen not resting:\n" + asleep);
+        helper.assertTrue(asleep.contains("citizen " + sleeper.getUUID() + " job=builder task=sleeping"), "sleeping citizen not shown sleeping:\n" + asleep);
         sleeper.discard();
         helper.succeedWhen(() -> {
             String text = String.join("\n", VillageCommand.describe(helper.getLevel(), village));
@@ -93,5 +94,23 @@ public final class VillageCommandTests {
             helper.assertTrue(text.contains("task=idle (waiting for a buildable plot near the bell)"), "missing plot reason:\n" + text);
             VillageTestSupport.remove(helper, village);
         });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_far_citizen")
+    public static void describeListsRosterCitizensAnywhere(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 4, false);
+        Villager far = GameTestSupport.spawnVillager(helper, 2, 1, 2);
+        far.teleportTo(far.getX(), far.getY() + 40, far.getZ());
+        CitizenTestSupport.enroll(far, village, JobType.LUMBERJACK, ItemStack.EMPTY, new ScriptedJob());
+        village.setCitizen(far.getUUID(), JobType.LUMBERJACK);
+        UUID gone = UUID.randomUUID();
+        village.setCitizen(gone, JobType.BUILDER);
+        String text = String.join("\n", VillageCommand.describe(helper.getLevel(), village));
+        far.discard();
+        VillageTestSupport.remove(helper, village);
+        helper.assertTrue(text.contains("citizen " + far.getUUID() + " job=lumberjack task="), "citizen far from the bell not listed:\n" + text);
+        helper.assertTrue(text.contains("citizen " + gone + " job=builder not loaded"), "unloaded roster citizen not listed:\n" + text);
+        helper.succeed();
     }
 }

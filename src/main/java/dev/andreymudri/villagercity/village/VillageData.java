@@ -3,6 +3,7 @@ package dev.andreymudri.villagercity.village;
 import dev.andreymudri.villagercity.citizen.JobType;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Set;
 import java.util.LinkedHashSet;
@@ -35,15 +36,20 @@ public final class VillageData {
     private final Map<UUID, JobType> citizens;
     private final Map<UUID, Long> storehouseDebt;
     private final Set<BlockPos> felling;
+    private final Set<BlockPos> failedPlots;
     private boolean managed;
+    /** Game time before which no builder or storehouse placement searches this village for a spot again; not saved. */
+    private long nextPlotSearch;
+    private long nextStorehouseSearch;
+    private final Map<BlockPos, Long> unreachablePlots = new HashMap<>();
 
     public VillageData(UUID id, BlockPos center, int radius) {
-        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), Map.of(), List.of(), true);
+        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), Map.of(), List.of(), List.of(), true);
     }
 
     public VillageData(UUID id, BlockPos center, int radius, VillageAge age, @Nullable BlockPos storehousePos,
                        List<BuildingRecord> houses, List<Plot> plots, ContributionLedger ledger, Map<UUID, JobType> citizens,
-                       Map<UUID, Long> storehouseDebt, List<BlockPos> felling, boolean managed) {
+                       Map<UUID, Long> storehouseDebt, List<BlockPos> felling, List<BlockPos> failedPlots, boolean managed) {
         this.id = id;
         this.center = center.immutable();
         this.radius = radius;
@@ -56,6 +62,8 @@ public final class VillageData {
         this.storehouseDebt = new LinkedHashMap<>(storehouseDebt);
         this.felling = new LinkedHashSet<>();
         felling.forEach(pos -> this.felling.add(pos.immutable()));
+        this.failedPlots = new LinkedHashSet<>();
+        failedPlots.forEach(pos -> this.failedPlots.add(pos.immutable()));
         this.managed = managed;
     }
 
@@ -144,6 +152,45 @@ public final class VillageData {
 
     public boolean stopFelling(BlockPos base) {
         return felling.remove(base);
+    }
+
+    /** Origins of plots dropped after {@code BuilderJob.MAX_ABANDONS}; the builder never picks them again. */
+    public List<BlockPos> failedPlots() {
+        return List.copyOf(failedPlots);
+    }
+
+    public boolean isFailedPlot(BlockPos origin) {
+        return failedPlots.contains(origin);
+    }
+
+    public void markPlotFailed(BlockPos origin) {
+        failedPlots.add(origin.immutable());
+    }
+
+    /** Remembers, until the given game time and without saving, a plot origin a builder could not path to. */
+    public void markPlotUnreachable(BlockPos origin, long until) {
+        unreachablePlots.put(origin.immutable(), until);
+    }
+
+    public boolean isPlotUnreachable(BlockPos origin, long gameTime) {
+        unreachablePlots.values().removeIf(until -> until <= gameTime);
+        return unreachablePlots.containsKey(origin);
+    }
+
+    public long nextPlotSearch() {
+        return nextPlotSearch;
+    }
+
+    public void setNextPlotSearch(long gameTime) {
+        this.nextPlotSearch = gameTime;
+    }
+
+    public long nextStorehouseSearch() {
+        return nextStorehouseSearch;
+    }
+
+    public void setNextStorehouseSearch(long gameTime) {
+        this.nextStorehouseSearch = gameTime;
     }
 
     /** When false, the village ticker leaves this village alone (used by focused GameTests). */

@@ -34,11 +34,13 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
@@ -55,11 +57,14 @@ public final class BuilderJob implements Job {
     public static final double WORK_REACH = 4.0;
     public static final int STAND_ASIDE_DISTANCE = 2;
     public static final double STAND_ASIDE_REACH = 0.9;
-    /** How long a builder waits after finding no buildable plot before searching again. */
+    /** How long builders wait after the village had no buildable plot before searching again. */
     public static final int PLOT_SEARCH_RETRY_TICKS = 200;
+    /** How long a plot origin the builder could not path to is skipped. */
+    public static final int UNREACHABLE_PLOT_TICKS = 6000;
+    /** Pathfinding checks per plot search; later spots wait for the next search, after the checked ones are skipped. */
+    public static final int PATH_CHECKS_PER_SEARCH = 3;
 
     private int consecutiveFailures;
-    private long nextPlotSearch;
     private @Nullable String waitingFor;
 
     @Override
@@ -106,6 +111,7 @@ public final class BuilderJob implements Job {
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
             if (plot.abandons() + 1 >= MAX_ABANDONS) {
                 village.removePlot(plot.id());
+                village.markPlotFailed(plot.origin());
             } else {
                 village.releasePlot(plot.id(), level.getGameTime() + RETRY_TICKS, true);
             }
@@ -116,7 +122,8 @@ public final class BuilderJob implements Job {
         Map<Item, Integer> missing = Inventories.missing(Blueprint.materialsFor(unfinished), inventory);
         if (!missing.isEmpty()) {
             if (storehouse == null || !(level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity) || !entity.hasAll(missing)) {
-                waitingFor = storehouse == null ? "a storehouse" : "materials: " + shortfall(level, storehouse, missing);
+                waitingFor = storehouse == null || !(level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity)
+                        ? "a storehouse" : "materials: " + shortfall(level, storehouse, missing);
                 return null;
             }
             return TaskSequence.of(new MoveTo(storehouse, 2.5), new Withdraw(storehouse, missing));
@@ -204,6 +211,27 @@ public final class BuilderJob implements Job {
         return TaskSequence.of(new MoveTo(storehouse, 2.5), new Deposit(storehouse, BuilderJob::isBuildingMaterial));
     }
 
+    /**
+     * False when the builder's pathfinder, from where it stands, ends short of the plot corner (below a cliff, across
+     * water), remembering the spot for {@link #UNREACHABLE_PLOT_TICKS}. A spot beyond the villager's follow range cannot
+     * be judged, so it counts as reachable. While the villager cannot path at all (mid-air) nothing is claimed yet.
+     */
+    private static boolean reachable(Villager villager, VillageData village, BlockPos spot, long now) {
+        double range = villager.getAttributeValue(Attributes.FOLLOW_RANGE) - 4;
+        if (villager.distanceToSqr(Vec3.atBottomCenterOf(spot)) > range * range) {
+            return true;
+        }
+        Path path = villager.getNavigation().createPath(spot, 1);
+        if (path == null) {
+            return false;
+        }
+        if (path.canReach()) {
+            return true;
+        }
+        village.markPlotUnreachable(spot, now + UNREACHABLE_PLOT_TICKS);
+        return false;
+    }
+
     /** What the storehouse lacks of {@code wanted}, as "item xN" pairs. */
     private static String shortfall(ServerLevel level, BlockPos storehouse, Map<Item, Integer> wanted) {
         Map<Item, Integer> have = level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity ? entity.counts() : Map.of();
@@ -235,21 +263,29 @@ public final class BuilderJob implements Job {
             return Optional.empty();
         }
         Optional<Blueprint> blueprint = Blueprints.load(level, Blueprints.STARTER_HOUSE);
-        if (blueprint.isEmpty() || !(level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity)) {
-            waitingFor = "the storehouse to load";
+        if (blueprint.isEmpty()) {
+            waitingFor = "the starter house blueprint";
+            return Optional.empty();
+        }
+        if (!(level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity)) {
+            waitingFor = level.isLoaded(storehouse) ? "a storehouse" : "the storehouse to load";
             return Optional.empty();
         }
         if (!entity.hasAll(blueprint.get().requiredMaterials())) {
             waitingFor = "materials: " + shortfall(level, storehouse, blueprint.get().requiredMaterials());
             return Optional.empty();
         }
-        if (level.getGameTime() < nextPlotSearch) {
+        if (level.getGameTime() < village.nextPlotSearch()) {
             waitingFor = "a buildable plot near the bell";
             return Optional.empty();
         }
-        Optional<BlockPos> origin = PlotPlanner.find(level, village, blueprint.get().size());
+        long now = level.getGameTime();
+        int[] pathChecks = {0};
+        Optional<BlockPos> origin = PlotPlanner.find(level, village, blueprint.get().size(),
+                spot -> !village.isFailedPlot(spot) && !village.isPlotUnreachable(spot, now)
+                        && pathChecks[0]++ < PATH_CHECKS_PER_SEARCH && reachable(ctx.villager(), village, spot, now));
         if (origin.isEmpty()) {
-            nextPlotSearch = level.getGameTime() + PLOT_SEARCH_RETRY_TICKS;
+            village.setNextPlotSearch(now + PLOT_SEARCH_RETRY_TICKS);
             waitingFor = "a buildable plot near the bell";
             return Optional.empty();
         }

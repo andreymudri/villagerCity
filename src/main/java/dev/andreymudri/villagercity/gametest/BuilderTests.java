@@ -4,6 +4,7 @@ import dev.andreymudri.villagercity.VillagerCity;
 import dev.andreymudri.villagercity.blueprint.Blueprint;
 import dev.andreymudri.villagercity.blueprint.BlueprintPlacement;
 import dev.andreymudri.villagercity.blueprint.Blueprints;
+import dev.andreymudri.villagercity.citizen.CitizenAttachments;
 import dev.andreymudri.villagercity.citizen.Inventories;
 import dev.andreymudri.villagercity.citizen.JobType;
 import dev.andreymudri.villagercity.job.BuilderJob;
@@ -12,12 +13,15 @@ import dev.andreymudri.villagercity.storehouse.StorehouseContent;
 import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
+import dev.andreymudri.villagercity.village.plot.PlotPlanner;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
@@ -134,7 +138,79 @@ public final class BuilderTests {
         CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
         helper.succeedWhen(() -> {
             helper.assertTrue(village.plots().stream().noneMatch(p -> p.id().equals(plotId)), "plot not dropped on the third abandon");
+            helper.assertTrue(village.isFailedPlot(helper.absolutePos(origin)), "dropped plot not remembered as failed");
             assertAbandonedWalls(helper, origin);
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_builder_failed_plot", timeoutTicks = 600)
+    public static void neverClaimsAFailedPlotAgain(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        stockedStorehouse(helper, village, blueprint, 1);
+        BlockPos first = PlotPlanner.find(helper.getLevel(), village, blueprint.size()).orElseThrow();
+        village.markPlotFailed(first);
+        Villager villager = GameTestSupport.spawnVillager(helper, 22, 1, 20);
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.plots().size() == 1, "no plot claimed");
+            helper.assertTrue(!village.plots().get(0).origin().equals(first), "failed plot claimed again at " + first);
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_builder_unreachable_plot", timeoutTicks = 800)
+    public static void neverClaimsAPlotItCannotWalkTo(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // A sheer 8-high plateau of paths (never buildable) in the middle; the only flat ground is the ring below it.
+        for (int x = 10; x <= 38; x++) {
+            for (int z = 10; z <= 38; z++) {
+                for (int y = 1; y <= 8; y++) {
+                    helper.setBlock(x, y, z, Blocks.DIRT_PATH);
+                }
+            }
+        }
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 9, 24), 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        Map<Item, Integer> materials = blueprint.requiredMaterials();
+        helper.setBlock(new BlockPos(20, 9, 24), StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(new BlockPos(20, 9, 24)));
+        StorehouseBlockEntity storehouse = helper.getBlockEntity(new BlockPos(20, 9, 24));
+        materials.forEach((item, count) -> {
+            for (int left = count; left > 0; left -= new ItemStack(item).getMaxStackSize()) {
+                storehouse.insertFromCitizen(new ItemStack(item, Math.min(left, new ItemStack(item).getMaxStackSize())));
+            }
+        });
+        helper.assertTrue(PlotPlanner.find(helper.getLevel(), village, blueprint.size()).isPresent(), "no buildable ground below the plateau; the test needs some");
+        Villager villager = GameTestSupport.spawnVillager(helper, 24, 9, 20);
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
+        helper.runAfterDelay(600, () -> {
+            List<Plot> plots = village.plots();
+            String waiting = villager.getData(CitizenAttachments.RUNTIME).activeJob().waitingFor();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(plots.isEmpty(), "claimed a plot below the cliff: " + plots);
+            helper.assertTrue("a buildable plot near the bell".equals(waiting), "waiting for " + waiting);
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_builder_search_backoff", timeoutTicks = 600)
+    public static void buildersShareTheWaitAfterAFailedPlotSearch(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        stockedStorehouse(helper, village, blueprint, 1);
+        ServerLevel level = helper.getLevel();
+        // A search just failed for this village: no builder may search again before the wait is over.
+        long until = level.getGameTime() + BuilderJob.PLOT_SEARCH_RETRY_TICKS;
+        village.setNextPlotSearch(until);
+        Villager villager = GameTestSupport.spawnVillager(helper, 22, 1, 20);
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.plots().size() == 1, "no plot claimed");
+            helper.assertTrue(level.getGameTime() >= until, "plot claimed during the village's wait");
             VillageTestSupport.remove(helper, village);
         });
     }
