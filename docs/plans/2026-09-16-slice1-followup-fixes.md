@@ -359,6 +359,8 @@ from several slots into the first slot's components, losing names and enchantmen
 - Modify: `src/main/java/dev/andreymudri/villagercity/storehouse/StorehouseContent.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/storehouse/StorehouseMenu.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/gametest/StorehouseTests.java`
+- Create: `src/main/resources/data/minecraft/tags/block/wither_immune.json`
+- Create: `src/main/resources/data/minecraft/tags/block/dragon_immune.json`
 
 **Depends:** T6
 
@@ -383,6 +385,8 @@ through the vanilla `Container` path, which checks `Container.canTakeItem`.
 - [ ] **Step 4:** `StorehouseBlock`: override `playerWillDestroy(Level level, BlockPos pos, BlockState state, Player player)`. On a `ServerLevel`, when the block entity is a `StorehouseBlockEntity`, sum the counts of its 27 slots and call `StorehouseMenu.chargeDebt(serverLevel, pos, player.getUUID(), total)`; then return `super.playerWillDestroy(...)`. Contents still drop in `onRemove` as before.
 
 - [ ] **Step 5:** `StorehouseContent`: build the block properties as `BlockBehaviour.Properties.ofFullCopy(Blocks.BARREL).explosionResistance(1200.0f)`. Check the method name in the decompiled `BlockBehaviour.Properties` before using it.
+
+- [ ] **Step 5b:** (amended after the phase 3 security review, reproduced: a hurt wither calls `level.destroyBlock` on the storehouse, which drops the contents with no debt, and 12 citizen logs came back as 12 credit.) Add a `StorehouseTests.bossesCannotBreakStorehouse` test (no batch), RED first: assert the storehouse default state `is(BlockTags.WITHER_IMMUNE)` and `is(BlockTags.DRAGON_IMMUNE)`, and that `CommonHooks.canEntityDestroy(level, pos, wither)` is false for a `EntityType.WITHER` created with `create(level)` but never added to the level, with the storehouse placed at `pos`. Then create both tag files as `{"replace": false, "values": ["villagercity:storehouse"]}`.
 
 - [ ] **Step 6:** Build and `scripts/gametest.sh` — both pass, including `dropsContentsWhenBroken`, `citizenInsertAndExtract` and `EndToEndTests`.
 
