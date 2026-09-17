@@ -12,6 +12,7 @@ import dev.andreymudri.villagercity.storehouse.StorehouseContent;
 import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
@@ -33,11 +34,18 @@ public final class BuilderTests {
 
     /** Places a storehouse holding `copies` full sets of the starter house materials. */
     static StorehouseBlockEntity stockedStorehouse(GameTestHelper helper, VillageData village, Blueprint blueprint, int copies) {
+        Map<Item, Integer> materials = new LinkedHashMap<>();
+        blueprint.requiredMaterials().forEach((item, count) -> materials.put(item, count * copies));
+        return stockedStorehouse(helper, village, materials);
+    }
+
+    /** Places a storehouse holding exactly the given materials. */
+    static StorehouseBlockEntity stockedStorehouse(GameTestHelper helper, VillageData village, Map<Item, Integer> materials) {
         helper.setBlock(STORE, StorehouseContent.BLOCK.get());
         village.setStorehousePos(helper.absolutePos(STORE));
         StorehouseBlockEntity storehouse = helper.getBlockEntity(STORE);
-        for (Map.Entry<Item, Integer> entry : blueprint.requiredMaterials().entrySet()) {
-            int left = entry.getValue() * copies;
+        for (Map.Entry<Item, Integer> entry : materials.entrySet()) {
+            int left = entry.getValue();
             while (left > 0) {
                 int stack = Math.min(left, new ItemStack(entry.getKey()).getMaxStackSize());
                 storehouse.insertFromCitizen(new ItemStack(entry.getKey(), stack));
@@ -102,12 +110,39 @@ public final class BuilderTests {
         helper.setBlock(origin.offset(1, 1, 0), Blocks.BEDROCK);
         CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
         helper.succeedWhen(() -> {
-            helper.assertTrue(village.plots().stream().noneMatch(p -> p.id().equals(plotId)), "plot not abandoned");
-            helper.assertBlockPresent(Blocks.COBBLESTONE, origin);
-            helper.assertBlockPresent(Blocks.COBBLESTONE, origin.offset(4, 0, 4));
-            helper.assertBlockPresent(Blocks.OAK_LOG, origin.offset(0, 1, 0));
-            helper.assertBlockPresent(Blocks.BEDROCK, origin.offset(1, 1, 0));
+            Plot plot = village.plots().stream().filter(p -> p.id().equals(plotId)).findFirst().orElse(null);
+            helper.assertTrue(plot != null, "plot dropped on the first abandon");
+            helper.assertTrue(plot.released(), "plot not released, builder " + plot.builder());
+            helper.assertTrue(plot.abandons() == 1, "abandons " + plot.abandons());
+            helper.assertTrue(plot.retryAt() > 0, "retryAt " + plot.retryAt());
+            assertAbandonedWalls(helper, origin);
             VillageTestSupport.remove(helper, village);
         });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_builder_abandon_drop", timeoutTicks = 3000)
+    public static void dropsPlotOnThirdAbandon(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        stockedStorehouse(helper, village, blueprint, 2);
+        Villager villager = GameTestSupport.spawnVillager(helper, 12, 1, 14);
+        BlockPos origin = new BlockPos(8, 1, 8);
+        UUID plotId = UUID.randomUUID();
+        village.addPlot(new Plot(plotId, blueprint.id().toString(), helper.absolutePos(origin), blueprint.size(), villager.getUUID(), 0L, 2));
+        helper.setBlock(origin.offset(1, 1, 0), Blocks.BEDROCK);
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.plots().stream().noneMatch(p -> p.id().equals(plotId)), "plot not dropped on the third abandon");
+            assertAbandonedWalls(helper, origin);
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    private static void assertAbandonedWalls(GameTestHelper helper, BlockPos origin) {
+        helper.assertBlockPresent(Blocks.COBBLESTONE, origin);
+        helper.assertBlockPresent(Blocks.COBBLESTONE, origin.offset(4, 0, 4));
+        helper.assertBlockPresent(Blocks.OAK_LOG, origin.offset(0, 1, 0));
+        helper.assertBlockPresent(Blocks.BEDROCK, origin.offset(1, 1, 0));
     }
 }

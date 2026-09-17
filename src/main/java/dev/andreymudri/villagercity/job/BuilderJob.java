@@ -41,12 +41,15 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Claims a plot once the storehouse holds a full blueprint's materials, withdraws what is missing,
- * then clears and places blocks in build order. Progress lives in the world and the plot record,
- * so a reloaded builder resumes by skipping blocks that are already right.
+ * Takes over a released plot once its retry time has passed, or else claims a new plot once the storehouse holds a
+ * full blueprint's materials; withdraws what is missing, then clears and places blocks in build order. Progress lives
+ * in the world and the plot record, so a reloaded or replacement builder resumes by skipping blocks that are already
+ * right. A plot that keeps failing is released for a cooldown, and dropped after {@link #MAX_ABANDONS} abandons.
  */
 public final class BuilderJob implements Job {
     public static final int MAX_CONSECUTIVE_FAILURES = 5;
+    public static final int MAX_ABANDONS = 3;
+    public static final int RETRY_TICKS = 2400;
     public static final double WORK_REACH = 4.0;
     public static final int STAND_ASIDE_DISTANCE = 2;
     public static final double STAND_ASIDE_REACH = 0.9;
@@ -89,7 +92,11 @@ public final class BuilderJob implements Job {
             return storehouse != null && Inventories.count(inventory, BuilderJob::isBuildingMaterial) > 0 ? deposit(storehouse) : null;
         }
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-            village.removePlot(plot.id());
+            if (plot.abandons() + 1 >= MAX_ABANDONS) {
+                village.removePlot(plot.id());
+            } else {
+                village.releasePlot(plot.id(), level.getGameTime() + RETRY_TICKS, true);
+            }
             VillageRegistry.get(level).setDirty();
             consecutiveFailures = 0;
             return null;
@@ -188,6 +195,15 @@ public final class BuilderJob implements Job {
         ServerLevel level = ctx.level();
         VillageData village = ctx.village();
         BlockPos storehouse = village.storehousePos();
+        Optional<Plot> released = village.plots().stream()
+                .filter(plot -> plot.released() && plot.retryAt() <= level.getGameTime())
+                .findFirst();
+        if (released.isPresent()) {
+            UUID self = ctx.villager().getUUID();
+            village.assignPlot(released.get().id(), self);
+            VillageRegistry.get(level).setDirty();
+            return village.plotBuiltBy(self);
+        }
         if (storehouse == null || !village.plots().isEmpty()) {
             return Optional.empty();
         }
