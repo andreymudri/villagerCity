@@ -1,9 +1,11 @@
 package dev.andreymudri.villagercity.village;
 
+import dev.andreymudri.villagercity.VillagerCity;
 import dev.andreymudri.villagercity.citizen.JobType;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.Set;
 import java.util.LinkedHashSet;
@@ -37,19 +39,29 @@ public final class VillageData {
     private final Map<UUID, Long> storehouseDebt;
     private final Set<BlockPos> felling;
     private final Set<BlockPos> failedPlots;
+    private final Set<BlockPos> pathCells;
+    /** The x and z of each of {@link #pathCells}, packed with {@code BlockPos.asLong(x, 0, z)}, for {@link #isPathColumn}. */
+    private final Set<Long> pathColumns;
+    private final List<BlockPos> pathQueue;
+    private @Nullable BlockPos craftingTablePos;
+    private @Nullable BlockPos furnacePos;
     private boolean managed;
     /** Game time before which no builder or storehouse placement searches this village for a spot again; not saved. */
     private long nextPlotSearch;
     private long nextStorehouseSearch;
     private final Map<BlockPos, Long> unreachablePlots = new HashMap<>();
+    /** The last recorded number of spots in the village dark enough for monsters to spawn; not saved. */
+    private int darkSpotCount;
+    /** The last recorded orders for the artisan, shown by the village command; not saved. */
+    private List<String> artisanOrders = List.of();
 
     public VillageData(UUID id, BlockPos center, int radius) {
-        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), Map.of(), List.of(), List.of(), true);
+        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), Map.of(), List.of(), List.of(), VillageWorks.EMPTY, true);
     }
 
     public VillageData(UUID id, BlockPos center, int radius, VillageAge age, @Nullable BlockPos storehousePos,
                        List<BuildingRecord> houses, List<Plot> plots, ContributionLedger ledger, Map<UUID, JobType> citizens,
-                       Map<UUID, Long> storehouseDebt, List<BlockPos> felling, List<BlockPos> failedPlots, boolean managed) {
+                       Map<UUID, Long> storehouseDebt, List<BlockPos> felling, List<BlockPos> failedPlots, VillageWorks works, boolean managed) {
         this.id = id;
         this.center = center.immutable();
         this.radius = radius;
@@ -64,6 +76,13 @@ public final class VillageData {
         felling.forEach(pos -> this.felling.add(pos.immutable()));
         this.failedPlots = new LinkedHashSet<>();
         failedPlots.forEach(pos -> this.failedPlots.add(pos.immutable()));
+        this.pathCells = new LinkedHashSet<>();
+        this.pathColumns = new HashSet<>();
+        works.pathCells().forEach(this::addPathCell);
+        this.pathQueue = new ArrayList<>();
+        works.pathQueue().forEach(this::queuePath);
+        setCraftingTablePos(works.craftingTable().orElse(null));
+        setFurnacePos(works.furnace().orElse(null));
         this.managed = managed;
     }
 
@@ -193,6 +212,76 @@ public final class VillageData {
         this.nextStorehouseSearch = gameTime;
     }
 
+    /** Cells a villager walks on along the laid paths: the air cell above each path block. */
+    public List<BlockPos> pathCells() {
+        return List.copyOf(pathCells);
+    }
+
+    /** True when any laid path cell has this x and z, whatever its height. */
+    public boolean isPathColumn(int x, int z) {
+        return pathColumns.contains(BlockPos.asLong(x, 0, z));
+    }
+
+    /** Records a laid path cell: the air cell above the path block, where a villager walks. */
+    public void addPathCell(BlockPos surface) {
+        BlockPos cell = surface.immutable();
+        pathCells.add(cell);
+        pathColumns.add(BlockPos.asLong(cell.getX(), 0, cell.getZ()));
+    }
+
+    /** Origins of houses still waiting for a path to the bell, oldest first. */
+    public List<BlockPos> pathQueue() {
+        return List.copyOf(pathQueue);
+    }
+
+    public void queuePath(BlockPos houseOrigin) {
+        BlockPos origin = houseOrigin.immutable();
+        if (!pathQueue.contains(origin)) {
+            pathQueue.add(origin);
+        }
+    }
+
+    public boolean removeQueuedPath(BlockPos houseOrigin) {
+        return pathQueue.remove(houseOrigin);
+    }
+
+    public @Nullable BlockPos craftingTablePos() {
+        return craftingTablePos;
+    }
+
+    public void setCraftingTablePos(@Nullable BlockPos pos) {
+        this.craftingTablePos = pos == null ? null : pos.immutable();
+    }
+
+    public @Nullable BlockPos furnacePos() {
+        return furnacePos;
+    }
+
+    public void setFurnacePos(@Nullable BlockPos pos) {
+        this.furnacePos = pos == null ? null : pos.immutable();
+    }
+
+    /** The saved form of the paths, the path queue and the workshop blocks. */
+    public VillageWorks works() {
+        return new VillageWorks(pathCells(), pathQueue(), Optional.ofNullable(craftingTablePos), Optional.ofNullable(furnacePos));
+    }
+
+    public int darkSpotCount() {
+        return darkSpotCount;
+    }
+
+    public void setDarkSpotCount(int darkSpotCount) {
+        this.darkSpotCount = darkSpotCount;
+    }
+
+    public List<String> artisanOrders() {
+        return artisanOrders;
+    }
+
+    public void setArtisanOrders(List<String> orders) {
+        this.artisanOrders = List.copyOf(orders);
+    }
+
     /** When false, the village ticker leaves this village alone (used by focused GameTests). */
     public boolean managed() {
         return managed;
@@ -210,8 +299,12 @@ public final class VillageData {
         return houses.size();
     }
 
+    /** Records a finished building; one built from a village blueprint ({@code villagercity:}) also queues a path to the bell. */
     public void addHouse(BuildingRecord house) {
         houses.add(house);
+        if (house.blueprint().startsWith(VillagerCity.MODID + ":")) {
+            queuePath(house.origin());
+        }
         radius = Math.max(radius, farthestCorner(house.footprint()) + RADIUS_PADDING);
     }
 
@@ -235,7 +328,7 @@ public final class VillageData {
     /** Takes the plot away from its builder; another builder may take it over from game time {@code retryAt}. */
     public void releasePlot(UUID plotId, long retryAt, boolean abandoned) {
         replacePlot(plotId, plot -> new Plot(plot.id(), plot.blueprint(), plot.origin(), plot.size(), null, retryAt,
-                abandoned ? plot.abandons() + 1 : plot.abandons()));
+                abandoned ? plot.abandons() + 1 : plot.abandons(), plot.prepared()));
     }
 
     /** Releases every plot held by a builder that left, ready for takeover at once; leaving does not count as an abandon. */
@@ -244,7 +337,7 @@ public final class VillageData {
         for (int i = 0; i < plots.size(); i++) {
             Plot plot = plots.get(i);
             if (builder.equals(plot.builder())) {
-                plots.set(i, new Plot(plot.id(), plot.blueprint(), plot.origin(), plot.size(), null, 0L, plot.abandons()));
+                plots.set(i, new Plot(plot.id(), plot.blueprint(), plot.origin(), plot.size(), null, 0L, plot.abandons(), plot.prepared()));
                 changed = true;
             }
         }
@@ -252,7 +345,12 @@ public final class VillageData {
     }
 
     public void assignPlot(UUID plotId, UUID builder) {
-        replacePlot(plotId, plot -> new Plot(plot.id(), plot.blueprint(), plot.origin(), plot.size(), builder, plot.retryAt(), plot.abandons()));
+        replacePlot(plotId, plot -> new Plot(plot.id(), plot.blueprint(), plot.origin(), plot.size(), builder, plot.retryAt(), plot.abandons(), plot.prepared()));
+    }
+
+    /** Marks the plot's ground as levelled, so its builder may start. */
+    public void markPlotPrepared(UUID plotId) {
+        replacePlot(plotId, plot -> new Plot(plot.id(), plot.blueprint(), plot.origin(), plot.size(), plot.builder(), plot.retryAt(), plot.abandons(), true));
     }
 
     private void replacePlot(UUID plotId, UnaryOperator<Plot> change) {
@@ -271,6 +369,12 @@ public final class VillageData {
         occupied.add(Footprint.of(center, SINGLE_BLOCK));
         if (storehousePos != null) {
             occupied.add(Footprint.of(storehousePos, SINGLE_BLOCK));
+        }
+        if (craftingTablePos != null) {
+            occupied.add(Footprint.of(craftingTablePos, SINGLE_BLOCK));
+        }
+        if (furnacePos != null) {
+            occupied.add(Footprint.of(furnacePos, SINGLE_BLOCK));
         }
         houses.forEach(house -> occupied.add(house.footprint()));
         plots.forEach(plot -> occupied.add(plot.footprint()));

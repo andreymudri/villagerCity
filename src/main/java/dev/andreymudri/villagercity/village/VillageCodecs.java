@@ -31,9 +31,10 @@ public final class VillageCodecs {
             Vec3i.CODEC.fieldOf("size").forGetter(Plot::size),
             UUIDUtil.CODEC.optionalFieldOf("builder").forGetter(p -> Optional.ofNullable(p.builder())),
             Codec.LONG.optionalFieldOf("retry_at", 0L).forGetter(Plot::retryAt),
-            Codec.INT.optionalFieldOf("abandons", 0).forGetter(Plot::abandons)
-    ).apply(i, (id, blueprint, origin, size, builder, retryAt, abandons) ->
-            new Plot(id, blueprint, origin, size, builder.orElse(null), retryAt, abandons)));
+            Codec.INT.optionalFieldOf("abandons", 0).forGetter(Plot::abandons),
+            Codec.BOOL.optionalFieldOf("prepared", true).forGetter(Plot::prepared)
+    ).apply(i, (id, blueprint, origin, size, builder, retryAt, abandons, prepared) ->
+            new Plot(id, blueprint, origin, size, builder.orElse(null), retryAt, abandons, prepared)));
 
     public static final Codec<VillageData> VILLAGE = RecordCodecBuilder.create(i -> i.group(
             UUIDUtil.CODEC.fieldOf("id").forGetter(VillageData::id),
@@ -48,9 +49,10 @@ public final class VillageCodecs {
             Codec.unboundedMap(UUIDUtil.STRING_CODEC, Codec.LONG).optionalFieldOf("storehouse_debt", Map.of()).forGetter(VillageData::storehouseDebt),
             BlockPos.CODEC.listOf().optionalFieldOf("felling", List.of()).forGetter(VillageData::felling),
             BlockPos.CODEC.listOf().optionalFieldOf("failed_plots", List.of()).forGetter(VillageData::failedPlots),
+            VillageWorks.CODEC.optionalFieldOf("works", VillageWorks.EMPTY).forGetter(VillageData::works),
             Codec.BOOL.optionalFieldOf("managed", true).forGetter(VillageData::managed)
-    ).apply(i, (id, center, radius, age, storehouse, houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, managed) ->
-            new VillageData(id, center, radius, age, storehouse.orElse(null), houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, managed)));
+    ).apply(i, (id, center, radius, age, storehouse, houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, works, managed) ->
+            new VillageData(id, center, radius, age, storehouse.orElse(null), houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, works, managed)));
 
     private VillageCodecs() {
     }

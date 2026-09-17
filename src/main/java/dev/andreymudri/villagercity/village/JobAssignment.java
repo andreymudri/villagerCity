@@ -16,12 +16,12 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.AABB;
 
 /**
- * Slice 1: keep one lumberjack and one builder. Filled jobs come from the village's saved citizen roster, so a
- * worker away from the bell still counts; candidates come from adult villagers with no vanilla profession inside
- * the village area.
+ * Keeps one citizen in each of {@link #SLICE_JOBS}, hired in that order: lumberjack, builder, artisan, paver and
+ * lamplighter. Filled jobs come from the village's saved citizen roster, so a worker away from the bell still counts;
+ * candidates come from adult villagers with no vanilla profession inside the village area, sorted by UUID.
  */
 public final class JobAssignment {
-    public static final List<JobType> SLICE_JOBS = List.of(JobType.LUMBERJACK, JobType.BUILDER);
+    public static final List<JobType> SLICE_JOBS = List.of(JobType.LUMBERJACK, JobType.BUILDER, JobType.ARTISAN, JobType.PAVER, JobType.LAMPLIGHTER);
     public static final int VERTICAL_RANGE = 32;
 
     private JobAssignment() {
@@ -53,8 +53,13 @@ public final class JobAssignment {
         }
     }
 
+    /** Enrolls the villager in the job with its starting tool: a stone axe for the lumberjack, a stone pickaxe for the paver, nothing otherwise. */
     public static void employ(Villager villager, VillageData village, JobType job) {
-        ItemStack tool = job == JobType.LUMBERJACK ? new ItemStack(Items.STONE_AXE) : ItemStack.EMPTY;
+        ItemStack tool = switch (job) {
+            case LUMBERJACK -> new ItemStack(Items.STONE_AXE);
+            case PAVER -> new ItemStack(Items.STONE_PICKAXE);
+            default -> ItemStack.EMPTY;
+        };
         villager.setData(CitizenAttachments.CITIZEN, new CitizenData(village.id(), job, tool));
         village.setCitizen(villager.getUUID(), job);
     }

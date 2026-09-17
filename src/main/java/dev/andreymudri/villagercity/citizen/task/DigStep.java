@@ -126,7 +126,7 @@ public final class DigStep implements Task {
     }
 
     /** Natural ground with no fluid beside it (digging it must not flood the tunnel). */
-    static boolean isDiggable(ServerLevel level, BlockPos pos) {
+    public static boolean isDiggable(ServerLevel level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         boolean natural = state.is(BlockTags.BASE_STONE_OVERWORLD) || state.is(BlockTags.DIRT) || state.is(BlockTags.SAND)
                 || state.is(Blocks.GRAVEL) || state.is(Tags.Blocks.ORES) || state.is(Blocks.CLAY) || state.is(BlockTags.SNOW)

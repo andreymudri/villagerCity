@@ -4,6 +4,7 @@ import com.mojang.serialization.JsonOps;
 import dev.andreymudri.villagercity.VillagerCity;
 import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.ContributionCategory;
+import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageCodecs;
 import dev.andreymudri.villagercity.village.VillageData;
@@ -16,6 +17,7 @@ import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtOps;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Blocks;
@@ -37,6 +39,16 @@ public final class VillageRegistryTests {
         village.setStorehousePos(helper.absolutePos(new BlockPos(20, 1, 24)));
         village.addHouse(new BuildingRecord("villagercity:blueprint/starter_house", helper.absolutePos(new BlockPos(5, 1, 5)), new Vec3i(5, 5, 5)));
         village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(new BlockPos(30, 1, 30)), new Vec3i(5, 5, 5), UUID.randomUUID()));
+        Plot unprepared = new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(new BlockPos(38, 1, 8)), new Vec3i(5, 5, 5), null, 0L, 0, false);
+        village.addPlot(unprepared);
+        BlockPos pathCell = helper.absolutePos(new BlockPos(18, 2, 24));
+        village.addPathCell(pathCell);
+        BlockPos queuedHouse = helper.absolutePos(new BlockPos(40, 1, 40));
+        village.queuePath(queuedHouse);
+        BlockPos table = helper.absolutePos(new BlockPos(19, 1, 22));
+        BlockPos furnace = helper.absolutePos(new BlockPos(19, 1, 26));
+        village.setCraftingTablePos(table);
+        village.setFurnacePos(furnace);
         village.ledger().record(UUID.randomUUID(), ContributionCategory.DEPOSIT, 42);
         BlockPos felling = helper.absolutePos(new BlockPos(10, 1, 30));
         village.startFelling(felling);
@@ -50,10 +62,78 @@ public final class VillageRegistryTests {
         helper.assertTrue(copy != null, "village lost on reload");
         helper.assertTrue(copy.isFelling(felling), "remembered felling lost on reload");
         helper.assertTrue(copy.isFailedPlot(failedPlot), "failed plot lost on reload");
+        helper.assertTrue(copy.plots().stream().anyMatch(plot -> plot.id().equals(unprepared.id()) && !plot.prepared()), "unprepared plot decoded as prepared: " + copy.plots());
+        helper.assertTrue(copy.plots().stream().filter(plot -> !plot.id().equals(unprepared.id())).allMatch(Plot::prepared), "prepared plot decoded as unprepared: " + copy.plots());
+        helper.assertTrue(copy.pathCells().contains(pathCell) && copy.isPathColumn(pathCell.getX(), pathCell.getZ()), "path cells lost on reload: " + copy.pathCells());
+        helper.assertTrue(copy.pathQueue().contains(queuedHouse), "path queue lost on reload: " + copy.pathQueue());
+        helper.assertTrue(table.equals(copy.craftingTablePos()), "crafting table lost on reload: " + copy.craftingTablePos());
+        helper.assertTrue(furnace.equals(copy.furnacePos()), "furnace lost on reload: " + copy.furnacePos());
         String before = VillageCodecs.VILLAGE.encodeStart(JsonOps.INSTANCE, village).getOrThrow().toString();
         String after = VillageCodecs.VILLAGE.encodeStart(JsonOps.INSTANCE, copy).getOrThrow().toString();
         helper.assertTrue(before.equals(after), "round trip changed data:\n" + before + "\n" + after);
         VillageTestSupport.remove(helper, village);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void plotSavedWithoutPreparedFlagLoadsPrepared(GameTestHelper helper) {
+        Plot plot = new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(new BlockPos(30, 1, 30)), new Vec3i(5, 5, 5), null, 0L, 0, false);
+        CompoundTag tag = (CompoundTag) VillageCodecs.PLOT.encodeStart(NbtOps.INSTANCE, plot).getOrThrow();
+        tag.remove("prepared");
+        Plot legacy = VillageCodecs.PLOT.parse(NbtOps.INSTANCE, tag).getOrThrow();
+        helper.assertTrue(legacy.prepared(), "plot saved before the prepared flag decoded as unprepared");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void plotCopiesKeepThePreparedFlag(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        UUID plotId = UUID.randomUUID();
+        UUID builder = UUID.randomUUID();
+        village.addPlot(new Plot(plotId, "villagercity:blueprint/starter_house", helper.absolutePos(new BlockPos(30, 1, 30)), new Vec3i(5, 5, 5), null, 0L, 0, false));
+        village.assignPlot(plotId, builder);
+        helper.assertTrue(!village.plots().get(0).prepared(), "assignPlot prepared the plot: " + village.plots());
+        village.releasePlot(plotId, 100L, true);
+        helper.assertTrue(!village.plots().get(0).prepared(), "releasePlot prepared the plot: " + village.plots());
+        village.assignPlot(plotId, builder);
+        helper.assertTrue(!village.plots().get(0).prepared(), "second assignPlot prepared the plot: " + village.plots());
+        helper.assertTrue(village.releasePlotsBuiltBy(builder), "releasePlotsBuiltBy released nothing: " + village.plots());
+        helper.assertTrue(!village.plots().get(0).prepared(), "releasePlotsBuiltBy prepared the plot: " + village.plots());
+        village.markPlotPrepared(plotId);
+        helper.assertTrue(village.plots().get(0).prepared(), "markPlotPrepared left the plot unprepared: " + village.plots());
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void workshopBlocksCountAsOccupied(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        BlockPos table = helper.absolutePos(new BlockPos(19, 1, 22));
+        BlockPos furnace = helper.absolutePos(new BlockPos(19, 1, 26));
+        Footprint tableFootprint = Footprint.of(table, new Vec3i(1, 1, 1));
+        Footprint furnaceFootprint = Footprint.of(furnace, new Vec3i(1, 1, 1));
+        helper.assertTrue(!village.occupiedFootprints().contains(tableFootprint) && !village.occupiedFootprints().contains(furnaceFootprint),
+                "workshop footprints occupied before the workshop was set: " + village.occupiedFootprints());
+        village.setCraftingTablePos(table);
+        village.setFurnacePos(furnace);
+        helper.assertTrue(village.occupiedFootprints().contains(tableFootprint), "crafting table not occupied: " + village.occupiedFootprints());
+        helper.assertTrue(village.occupiedFootprints().contains(furnaceFootprint), "furnace not occupied: " + village.occupiedFootprints());
+        village.setCraftingTablePos(null);
+        village.setFurnacePos(null);
+        helper.assertTrue(!village.occupiedFootprints().contains(tableFootprint) && !village.occupiedFootprints().contains(furnaceFootprint),
+                "workshop footprints still occupied after clearing the workshop: " + village.occupiedFootprints());
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void addHouseQueuesAPathOnlyForVillageBlueprints(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        BlockPos built = helper.absolutePos(new BlockPos(5, 1, 5));
+        BlockPos vanilla = helper.absolutePos(new BlockPos(30, 1, 30));
+        village.addHouse(new BuildingRecord("villagercity:blueprint/starter_house", built, new Vec3i(5, 5, 5)));
+        village.addHouse(new BuildingRecord("minecraft:home", vanilla, new Vec3i(1, 1, 1)));
+        helper.assertTrue(village.pathQueue().equals(List.of(built)), "path queue " + village.pathQueue());
+        helper.assertTrue(village.removeQueuedPath(built) && village.pathQueue().isEmpty(), "queued path not removed: " + village.pathQueue());
+        helper.assertTrue(!village.removeQueuedPath(built), "removed a path that was not queued");
         helper.succeed();
     }
 
