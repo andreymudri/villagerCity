@@ -8,6 +8,7 @@ import dev.andreymudri.villagercity.citizen.TaskSequence;
 import dev.andreymudri.villagercity.citizen.task.Deposit;
 import dev.andreymudri.villagercity.citizen.task.MoveTo;
 import dev.andreymudri.villagercity.citizen.task.PickUpItems;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import javax.annotation.Nullable;
@@ -20,10 +21,18 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 
-/** Fells the nearest natural tree, collects the drops, replants, and hauls logs to the storehouse. */
+/**
+ * Fells the nearest natural tree, collects the drops, replants, and hauls logs to the storehouse. A tree whose
+ * felling failed or left its trunk standing is skipped for {@link #AVOID_TICKS}; the avoid list is in-memory only,
+ * as {@link Job} keeps no state that must survive a save.
+ */
 public final class LumberjackJob implements Job {
     public static final int DEPOSIT_THRESHOLD = 16;
     public static final double DROP_RADIUS = 6.0;
+    public static final int AVOID_TICKS = 2400;
+
+    private final Map<BlockPos, Long> avoidUntil = new HashMap<>();
+    private @Nullable BlockPos target;
 
     static final Map<Block, Item> SAPLINGS = Map.of(
             Blocks.OAK_LOG, Items.OAK_SAPLING,
@@ -52,9 +61,12 @@ public final class LumberjackJob implements Job {
         SimpleContainer inventory = ctx.villager().getInventory();
         BlockPos storehouse = ctx.village().storehousePos();
         int logs = Inventories.count(inventory, LumberjackJob::isLog);
+        long now = ctx.gameTime();
+        avoidUntil.values().removeIf(until -> until <= now);
+        target = null;
         Optional<TreeFinder.Tree> tree = logs >= DEPOSIT_THRESHOLD
                 ? Optional.empty()
-                : TreeFinder.findNearest(ctx.level(), ctx.villager().blockPosition(), ctx.village());
+                : TreeFinder.findNearest(ctx.level(), ctx.villager().blockPosition(), ctx.village(), base -> avoidUntil.containsKey(base));
         if (logs >= DEPOSIT_THRESHOLD || (tree.isEmpty() && Inventories.count(inventory, LumberjackJob::isDeposit) > 0)) {
             return storehouse == null ? null : TaskSequence.of(new MoveTo(storehouse, 2.5), new Deposit(storehouse, LumberjackJob::isDeposit));
         }
@@ -62,11 +74,20 @@ public final class LumberjackJob implements Job {
             return null;
         }
         TreeFinder.Tree found = tree.get();
+        target = found.base();
         return TaskSequence.of(
                 new MoveTo(found.base(), 2.5),
                 new ChopTree(found.logs()),
                 new PickUpItems(found.base(), DROP_RADIUS, LumberjackJob::isHaul),
                 new MoveTo(found.base(), 2.5),
                 new Replant(found.base(), SAPLINGS.getOrDefault(found.logBlock(), Items.AIR)));
+    }
+
+    @Override
+    public void onTaskFinished(TaskContext ctx, Task task, Task.Status status) {
+        if (target != null && (status == Task.Status.FAILED || TreeFinder.trunk(ctx.level(), target).isPresent())) {
+            avoidUntil.put(target, ctx.gameTime() + AVOID_TICKS);
+        }
+        target = null;
     }
 }
