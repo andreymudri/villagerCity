@@ -134,12 +134,11 @@ public final class PathWork implements Job {
                 // A block that is neither natural ground nor replaceable vegetation (a player's chest, for example)
                 // must never be broken. The cached route may have been planned before it appeared, or may have
                 // started right on it, so drop it and let the next plan() recompute a route around the obstruction.
-                VillagerCity.LOGGER.info("a block at {} blocks the path from the house at {} to the bell; recomputing the route",
-                        headroom, current);
-                if (current != null) {
-                    routes.remove(current);
-                    failures.remove(current);
-                }
+                // waitingFor is set so the loop in plan() does not mistake this for an already-built cell: without
+                // it, it would call addPathCell on the obstructed cell and, on the last cell, leave the queue as if
+                // the path had finished.
+                dropRoute(headroom);
+                waitingFor = "a block at " + headroom.toShortString() + " blocks the path to the bell";
                 return null;
             }
             building = true;
@@ -180,9 +179,47 @@ public final class PathWork implements Job {
         return null;
     }
 
-    private static TaskSequence dig(BlockPos pos) {
-        return TaskSequence.of(MoveTo.digOut(pos, BuilderJob.WORK_REACH), new BreakBlock(pos),
+    /**
+     * Walks to {@code pos}, then re-checks {@link #clearable} right before breaking it: a block placed there since
+     * the cell was planned (a player's chest, say) is left alone and the route is dropped instead, just as
+     * {@link ChopTree} re-checks a log right before it breaks it rather than trusting a check made when it started.
+     */
+    private TaskSequence dig(BlockPos pos) {
+        return TaskSequence.of(MoveTo.digOut(pos, BuilderJob.WORK_REACH), new RequireClearable(pos), new BreakBlock(pos),
                 new PickUpItems(pos, 2.0, PathWork::isBlockItem));
+    }
+
+    /** Drops the cached route and its failure count for the house currently being built, logging why. */
+    private void dropRoute(BlockPos obstruction) {
+        VillagerCity.LOGGER.info("a block at {} blocks the path from the house at {} to the bell; recomputing the route",
+                obstruction, current);
+        if (current != null) {
+            routes.remove(current);
+            failures.remove(current);
+        }
+    }
+
+    /** An instant check, run as a {@link TaskSequence} step right before a {@link BreakBlock} it guards. */
+    private final class RequireClearable implements Task {
+        private final BlockPos pos;
+
+        RequireClearable(BlockPos pos) {
+            this.pos = pos;
+        }
+
+        @Override
+        public Status tick(TaskContext ctx) {
+            if (clearable(ctx.level(), pos)) {
+                return Status.SUCCESS;
+            }
+            dropRoute(pos);
+            return Status.FAILED;
+        }
+
+        @Override
+        public String describe(TaskContext ctx) {
+            return "checking " + pos.toShortString() + " is still clear to dig";
+        }
     }
 
     /** Withdraws up to {@link #WITHDRAW_BATCH} of the wanted item, or sets {@link #waitingFor} when the storehouse has none either. */
@@ -206,6 +243,11 @@ public final class PathWork implements Job {
         BlockPos origin = current;
         if (status != Task.Status.FAILED) {
             failures.remove(origin);
+            return;
+        }
+        if (!routes.containsKey(origin)) {
+            // dropRoute already ran (RequireClearable found the cell no longer clearable): the route is already
+            // gone and will be recomputed, so this failure is not one more of the MAX_CONSECUTIVE_FAILURES kind.
             return;
         }
         if (failures.merge(origin, 1, Integer::sum) >= MAX_CONSECUTIVE_FAILURES) {
