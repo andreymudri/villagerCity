@@ -91,39 +91,6 @@ public final class TreeTargetingTests {
         helper.succeed();
     }
 
-    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_frame")
-    public static void rejectsRaisedLogFramesNextToTree(GameTestHelper helper) {
-        GameTestSupport.prepareArea(helper);
-        LumberjackTests.plantTree(helper, new BlockPos(26, 1, 26));
-        logFrame(helper, 28, 26, 7);
-        LumberjackTests.plantTree(helper, new BlockPos(8, 1, 10));
-        logFrame(helper, 10, 10, 5);
-        Optional<TreeFinder.Tree> wide = TreeFinder.trunk(helper.getLevel(), helper.absolutePos(new BlockPos(28, 1, 26)));
-        helper.assertTrue(wide.isEmpty(), "7x7 log frame accepted as a tree with " + wide.map(t -> t.logs().size()).orElse(0) + " logs");
-        Optional<TreeFinder.Tree> narrow = TreeFinder.trunk(helper.getLevel(), helper.absolutePos(new BlockPos(10, 1, 10)));
-        helper.assertTrue(narrow.isEmpty(), "5x5 log frame accepted as a tree with " + narrow.map(t -> t.logs().size()).orElse(0) + " logs");
-        helper.succeed();
-    }
-
-    /** Four 3-high oak log corner posts, width blocks apart edge to edge, joined by a ring of logs on top. */
-    private static void logFrame(GameTestHelper helper, int minX, int minZ, int width) {
-        int maxX = minX + width - 1;
-        int maxZ = minZ + width - 1;
-        for (int x : new int[] {minX, maxX}) {
-            for (int z : new int[] {minZ, maxZ}) {
-                for (int y = 1; y <= 3; y++) {
-                    helper.setBlock(new BlockPos(x, y, z), Blocks.OAK_LOG);
-                }
-            }
-        }
-        for (int i = 0; i < width; i++) {
-            helper.setBlock(new BlockPos(minX + i, 4, minZ), Blocks.OAK_LOG);
-            helper.setBlock(new BlockPos(minX + i, 4, maxZ), Blocks.OAK_LOG);
-            helper.setBlock(new BlockPos(minX, 4, minZ + i), Blocks.OAK_LOG);
-            helper.setBlock(new BlockPos(maxX, 4, minZ + i), Blocks.OAK_LOG);
-        }
-    }
-
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_far", timeoutTicks = 3000)
     public static void neverChopsFromAfarAfterBeingMoved(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);

@@ -44,9 +44,9 @@ public final class VanillaTreeTests {
             TreeFeatures.SPRUCE, TreeFeatures.PINE, TreeFeatures.MEGA_SPRUCE, TreeFeatures.MEGA_PINE,
             TreeFeatures.JUNGLE_TREE, TreeFeatures.MEGA_JUNGLE_TREE, TreeFeatures.ACACIA, TreeFeatures.DARK_OAK,
             TreeFeatures.SWAMP_OAK, TreeFeatures.AZALEA_TREE, TreeFeatures.CHERRY);
-    private static final int SEEDS = 16;
+    private static final int SEEDS = 64;
 
-    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_vanilla_trees_found", timeoutTicks = 400)
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_vanilla_trees_found", timeoutTicks = 1200)
     public static void recognisesEveryVanillaTree(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();
         BlockPos origin = helper.absolutePos(ORIGIN);

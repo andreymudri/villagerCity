@@ -28,6 +28,7 @@ final class ChopTree implements Task {
     private final BlockPos base;
     private final Deque<BlockPos> remaining;
     private @Nullable BreakBlock current;
+    private @Nullable BlockPos breaking;
     private @Nullable MoveTo returning;
 
     ChopTree(BlockPos base, List<BlockPos> logs) {
@@ -42,6 +43,7 @@ final class ChopTree implements Task {
             if (current != null) {
                 current.stop(ctx);
                 current = null;
+                remaining.push(breaking);
             }
             if (returning == null) {
                 returning = new MoveTo(base, 2.5);
@@ -67,6 +69,7 @@ final class ChopTree implements Task {
                     || ctx.villager().distanceToSqr(Vec3.atCenterOf(next)) > FELL_REACH * FELL_REACH) {
                 continue;
             }
+            breaking = next;
             current = new BreakBlock(next, FELL_REACH);
             current.start(ctx);
         }

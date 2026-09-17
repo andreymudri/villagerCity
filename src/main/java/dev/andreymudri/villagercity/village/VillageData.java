@@ -4,6 +4,8 @@ import dev.andreymudri.villagercity.citizen.JobType;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.Set;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -32,15 +34,16 @@ public final class VillageData {
     private final ContributionLedger ledger;
     private final Map<UUID, JobType> citizens;
     private final Map<UUID, Long> storehouseDebt;
+    private final Set<BlockPos> felling;
     private boolean managed;
 
     public VillageData(UUID id, BlockPos center, int radius) {
-        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), Map.of(), true);
+        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), Map.of(), List.of(), true);
     }
 
     public VillageData(UUID id, BlockPos center, int radius, VillageAge age, @Nullable BlockPos storehousePos,
                        List<BuildingRecord> houses, List<Plot> plots, ContributionLedger ledger, Map<UUID, JobType> citizens,
-                       Map<UUID, Long> storehouseDebt, boolean managed) {
+                       Map<UUID, Long> storehouseDebt, List<BlockPos> felling, boolean managed) {
         this.id = id;
         this.center = center.immutable();
         this.radius = radius;
@@ -51,6 +54,8 @@ public final class VillageData {
         this.ledger = ledger;
         this.citizens = new LinkedHashMap<>(citizens);
         this.storehouseDebt = new LinkedHashMap<>(storehouseDebt);
+        this.felling = new LinkedHashSet<>();
+        felling.forEach(pos -> this.felling.add(pos.immutable()));
         this.managed = managed;
     }
 
@@ -125,6 +130,23 @@ public final class VillageData {
     }
 
     /** When false, the village ticker leaves this village alone (used by focused GameTests). */
+    /** Bases of trees a lumberjack started felling; the finder accepts them without their canopy, which goes first. */
+    public List<BlockPos> felling() {
+        return List.copyOf(felling);
+    }
+
+    public boolean isFelling(BlockPos base) {
+        return felling.contains(base);
+    }
+
+    public boolean startFelling(BlockPos base) {
+        return felling.add(base.immutable());
+    }
+
+    public boolean stopFelling(BlockPos base) {
+        return felling.remove(base);
+    }
+
     public boolean managed() {
         return managed;
     }

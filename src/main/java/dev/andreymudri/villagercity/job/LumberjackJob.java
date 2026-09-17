@@ -8,11 +8,13 @@ import dev.andreymudri.villagercity.citizen.TaskSequence;
 import dev.andreymudri.villagercity.citizen.task.Deposit;
 import dev.andreymudri.villagercity.citizen.task.MoveTo;
 import dev.andreymudri.villagercity.citizen.task.PickUpItems;
+import dev.andreymudri.villagercity.village.VillageRegistry;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.item.Item;
@@ -64,6 +66,11 @@ public final class LumberjackJob implements Job {
         long now = ctx.gameTime();
         avoidUntil.values().removeIf(until -> until <= now);
         target = null;
+        for (BlockPos base : ctx.village().felling()) {
+            if (!ctx.level().getBlockState(base).is(BlockTags.LOGS) && ctx.village().stopFelling(base)) {
+                VillageRegistry.get(ctx.level()).setDirty();
+            }
+        }
         Optional<TreeFinder.Tree> tree = logs >= DEPOSIT_THRESHOLD
                 ? Optional.empty()
                 : TreeFinder.findNearest(ctx.level(), ctx.villager().blockPosition(), ctx.village(), base -> avoidUntil.containsKey(base));
@@ -75,6 +82,9 @@ public final class LumberjackJob implements Job {
         }
         TreeFinder.Tree found = tree.get();
         target = found.base();
+        if (ctx.village().startFelling(found.base())) {
+            VillageRegistry.get(ctx.level()).setDirty();
+        }
         return TaskSequence.of(
                 new MoveTo(found.base(), 2.5),
                 new ChopTree(found.base(), found.logs()),
@@ -85,8 +95,11 @@ public final class LumberjackJob implements Job {
 
     @Override
     public void onTaskFinished(TaskContext ctx, Task task, Task.Status status) {
-        if (target != null && (status == Task.Status.FAILED || TreeFinder.trunk(ctx.level(), target).isPresent())) {
+        if (target != null && (status == Task.Status.FAILED || TreeFinder.trunk(ctx.level(), target, false).isPresent())) {
             avoidUntil.put(target, ctx.gameTime() + AVOID_TICKS);
+        }
+        if (target != null && !ctx.level().getBlockState(target).is(BlockTags.LOGS) && ctx.village().stopFelling(target)) {
+            VillageRegistry.get(ctx.level()).setDirty();
         }
         target = null;
     }
