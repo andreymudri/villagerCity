@@ -9,7 +9,10 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.EntityLeaveLevelEvent;
 
-/** Drops a citizen from its village roster when the villager is destroyed (killed, discarded, converted), not when it unloads. */
+/**
+ * Drops a citizen from its village roster, and releases the plots it was building, when the villager is destroyed
+ * (killed, discarded, converted) or changes dimension, not when it unloads.
+ */
 @EventBusSubscriber(modid = VillagerCity.MODID)
 public final class CitizenRoster {
     private CitizenRoster() {
@@ -21,7 +24,7 @@ public final class CitizenRoster {
             return;
         }
         Entity.RemovalReason reason = villager.getRemovalReason();
-        if (reason == null || !reason.shouldDestroy()) {
+        if (reason == null || !(reason.shouldDestroy() || reason == Entity.RemovalReason.CHANGED_DIMENSION)) {
             return;
         }
         villager.getExistingData(CitizenAttachments.CITIZEN.get()).ifPresent(data -> {
@@ -30,7 +33,12 @@ public final class CitizenRoster {
             }
             VillageRegistry registry = VillageRegistry.get(level);
             VillageData village = registry.get(data.villageId());
-            if (village != null && village.removeCitizen(villager.getUUID())) {
+            if (village == null) {
+                return;
+            }
+            boolean removed = village.removeCitizen(villager.getUUID());
+            boolean released = village.releasePlotsBuiltBy(villager.getUUID());
+            if (removed || released) {
                 registry.setDirty();
             }
         });

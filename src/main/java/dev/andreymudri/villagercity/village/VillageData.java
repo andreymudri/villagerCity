@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.UnaryOperator;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
@@ -85,7 +86,7 @@ public final class VillageData {
         return ledger;
     }
 
-    /** Employed citizens by villager UUID. Survives unloads; entries leave only when the villager is destroyed or dismissed. */
+    /** Employed citizens by villager UUID. Survives unloads; entries leave only when the villager is destroyed, changes dimension or is dismissed. */
     public Map<UUID, JobType> citizens() {
         return Collections.unmodifiableMap(citizens);
     }
@@ -157,8 +158,36 @@ public final class VillageData {
         return plots.removeIf(plot -> plot.id().equals(plotId));
     }
 
+    /** The plot this builder holds; released plots belong to nobody. */
     public Optional<Plot> plotBuiltBy(UUID builder) {
-        return plots.stream().filter(plot -> plot.builder().equals(builder)).findFirst();
+        return plots.stream().filter(plot -> plot.builder() != null && plot.builder().equals(builder)).findFirst();
+    }
+
+    /** Takes the plot away from its builder; another builder may take it over from game time {@code retryAt}. */
+    public void releasePlot(UUID plotId, long retryAt, boolean abandoned) {
+        replacePlot(plotId, plot -> new Plot(plot.id(), plot.blueprint(), plot.origin(), plot.size(), null, retryAt,
+                abandoned ? plot.abandons() + 1 : plot.abandons()));
+    }
+
+    /** Releases every plot held by a builder that left, ready for takeover at once; leaving does not count as an abandon. */
+    public boolean releasePlotsBuiltBy(UUID builder) {
+        boolean changed = false;
+        for (int i = 0; i < plots.size(); i++) {
+            Plot plot = plots.get(i);
+            if (builder.equals(plot.builder())) {
+                plots.set(i, new Plot(plot.id(), plot.blueprint(), plot.origin(), plot.size(), null, 0L, plot.abandons()));
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    public void assignPlot(UUID plotId, UUID builder) {
+        replacePlot(plotId, plot -> new Plot(plot.id(), plot.blueprint(), plot.origin(), plot.size(), builder, plot.retryAt(), plot.abandons()));
+    }
+
+    private void replacePlot(UUID plotId, UnaryOperator<Plot> change) {
+        plots.replaceAll(plot -> plot.id().equals(plotId) ? change.apply(plot) : plot);
     }
 
     /** Horizontal (cylindrical) membership test. */

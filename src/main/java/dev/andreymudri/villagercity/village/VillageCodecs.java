@@ -4,6 +4,7 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import dev.andreymudri.villagercity.citizen.JobType;
 import java.util.Map;
+import java.util.Optional;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.core.Vec3i;
@@ -27,8 +28,11 @@ public final class VillageCodecs {
             Codec.STRING.fieldOf("blueprint").forGetter(Plot::blueprint),
             BlockPos.CODEC.fieldOf("origin").forGetter(Plot::origin),
             Vec3i.CODEC.fieldOf("size").forGetter(Plot::size),
-            UUIDUtil.CODEC.fieldOf("builder").forGetter(Plot::builder)
-    ).apply(i, Plot::new));
+            UUIDUtil.CODEC.optionalFieldOf("builder").forGetter(p -> Optional.ofNullable(p.builder())),
+            Codec.LONG.optionalFieldOf("retry_at", 0L).forGetter(Plot::retryAt),
+            Codec.INT.optionalFieldOf("abandons", 0).forGetter(Plot::abandons)
+    ).apply(i, (id, blueprint, origin, size, builder, retryAt, abandons) ->
+            new Plot(id, blueprint, origin, size, builder.orElse(null), retryAt, abandons)));
 
     public static final Codec<VillageData> VILLAGE = RecordCodecBuilder.create(i -> i.group(
             UUIDUtil.CODEC.fieldOf("id").forGetter(VillageData::id),
