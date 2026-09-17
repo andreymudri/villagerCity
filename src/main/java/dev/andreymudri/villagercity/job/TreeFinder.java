@@ -22,10 +22,14 @@ import net.minecraft.world.level.block.state.BlockState;
 public final class TreeFinder {
     public static final int SEARCH_RADIUS = 24;
     public static final int VILLAGE_MARGIN = 32;
-    public static final int MAX_TRUNK = 32;
+    /** Enough for the largest sapling trees (a mega jungle tree has about 130 logs). */
+    public static final int MAX_TRUNK = 256;
     public static final int SCAN_DOWN = 6;
     public static final int SCAN_UP = 12;
-    public static final int MAX_SPREAD = 4;
+    public static final int MAX_SPREAD = 6;
+    /** Logs this many blocks above the base or lower belong to the trunk and may only be the base's 2x2 neighbours. */
+    public static final int GROUND_LAYERS = 1;
+    public static final int GROUND_SPREAD = 1;
     public static final int MIN_LEAVES = 4;
     private static final List<int[]> SPIRAL = PlotRules.spiral(SEARCH_RADIUS, 1);
 
@@ -70,10 +74,16 @@ public final class TreeFinder {
     }
 
     /**
-     * Collects up to 32 connected logs of the base's kind, upward and sideways. Empty when the base is not a log, or
-     * when it breaks one of three rules: logs reach at most {@link #MAX_SPREAD} (4) blocks sideways (Chebyshev) from
-     * the base; at least {@link #MIN_LEAVES} distinct natural (non-persistent) leaves touch the logs; the base has a
-     * log of its kind directly above it.
+     * Collects up to {@link #MAX_TRUNK} connected logs of the base's kind, upward and sideways. Empty when the base is
+     * not a log, or when it breaks one of four rules:
+     * <ul>
+     *   <li>logs at most {@link #GROUND_LAYERS} above the base stay within {@link #GROUND_SPREAD} block of it
+     *       (Chebyshev), so a trunk is one column or a 2x2 while a log wall on the ground is not;</li>
+     *   <li>higher logs (branches) reach at most {@link #MAX_SPREAD} blocks sideways; vanilla cherry and mega jungle
+     *       branches reach 5;</li>
+     *   <li>at least {@link #MIN_LEAVES} distinct natural (non-persistent) leaves touch the logs;</li>
+     *   <li>the base has a log of its kind directly above it.</li>
+     * </ul>
      */
     public static Optional<Tree> trunk(ServerLevel level, BlockPos base) {
         BlockState baseState = level.getBlockState(base);
@@ -99,7 +109,8 @@ public final class TreeFinder {
                         }
                         BlockState state = level.getBlockState(next);
                         if (state.is(log)) {
-                            if (Math.max(Math.abs(next.getX() - base.getX()), Math.abs(next.getZ() - base.getZ())) > MAX_SPREAD) {
+                            int spread = Math.max(Math.abs(next.getX() - base.getX()), Math.abs(next.getZ() - base.getZ()));
+                            if (spread > (next.getY() - base.getY() <= GROUND_LAYERS ? GROUND_SPREAD : MAX_SPREAD)) {
                                 return Optional.empty();
                             }
                             queue.add(next);

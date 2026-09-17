@@ -11,8 +11,15 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.phys.Vec3;
 
-/** Breaks each trunk log bottom-up; logs out of reach or already gone are skipped, a failed log does not abort the rest. */
+/**
+ * Fells a tree bottom-up from its base: every log is broken, including the ones above normal reach, so no trunk
+ * top or branch is left floating. Logs already gone are skipped, and a failed log (protected, say) does not abort
+ * the rest.
+ */
 final class ChopTree implements Task {
+    /** Covers the tallest sapling tree measured from a villager standing at its base. */
+    static final double FELL_REACH = 48.0;
+
     private final Deque<BlockPos> remaining;
     private @Nullable BreakBlock current;
 
@@ -28,10 +35,10 @@ final class ChopTree implements Task {
                 return Status.SUCCESS;
             }
             if (!ctx.level().getBlockState(next).is(BlockTags.LOGS)
-                    || ctx.villager().distanceToSqr(Vec3.atCenterOf(next)) > BreakBlock.REACH * BreakBlock.REACH) {
+                    || ctx.villager().distanceToSqr(Vec3.atCenterOf(next)) > FELL_REACH * FELL_REACH) {
                 continue;
             }
-            current = new BreakBlock(next);
+            current = new BreakBlock(next, FELL_REACH);
             current.start(ctx);
         }
         Status status = current.tick(ctx);
