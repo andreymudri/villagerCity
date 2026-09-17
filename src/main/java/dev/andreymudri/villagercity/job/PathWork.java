@@ -45,8 +45,9 @@ import net.minecraft.world.phys.Vec3;
  * cell at a time, clearing headroom, placing dirt or oak plank support where the ground is uneven or wet, and
  * surfacing dirt-like support with {@link MakePath}. Routes are cached per house origin until the house's path is
  * finished or abandoned. Only natural ground the paver can dig, or vegetation a placement can replace, is ever
- * broken; a block that is neither (a player's chest, say) drops the cached route instead, so the next plan() call
- * searches a route around it rather than through it.
+ * broken, and only ground still dirt-like when the paver gets there is ever paved; a block that fails either check
+ * (a player's chest or a block dropped on the support cell, say) drops the cached route instead, so the next plan()
+ * call searches a route around it rather than through it.
  */
 public final class PathWork implements Job {
     /** Consecutive failed build tasks on the same house's path before it is moved to the end of the queue. */
@@ -174,7 +175,7 @@ public final class PathWork implements Job {
 
         if (level.getBlockState(support).is(BlockTags.DIRT)) {
             building = true;
-            return TaskSequence.of(MoveTo.digOut(surface, BuilderJob.WORK_REACH), new MakePath(support));
+            return TaskSequence.of(MoveTo.digOut(surface, BuilderJob.WORK_REACH), new RequireDirt(support), new MakePath(support));
         }
         return null;
     }
@@ -222,6 +223,33 @@ public final class PathWork implements Job {
         }
     }
 
+    /**
+     * An instant check, run as a {@link TaskSequence} step right before a {@link MakePath} it guards: a block placed
+     * over dirt-like ground since the cell was planned (a player's block, say) is left alone and the route is
+     * dropped instead of being paved over, the same way {@link RequireClearable} guards a {@link BreakBlock}.
+     */
+    private final class RequireDirt implements Task {
+        private final BlockPos pos;
+
+        RequireDirt(BlockPos pos) {
+            this.pos = pos;
+        }
+
+        @Override
+        public Status tick(TaskContext ctx) {
+            if (ctx.level().getBlockState(pos).is(BlockTags.DIRT)) {
+                return Status.SUCCESS;
+            }
+            dropRoute(pos);
+            return Status.FAILED;
+        }
+
+        @Override
+        public String describe(TaskContext ctx) {
+            return "checking " + pos.toShortString() + " is still dirt-like ground";
+        }
+    }
+
     /** Withdraws up to {@link #WITHDRAW_BATCH} of the wanted item, or sets {@link #waitingFor} when the storehouse has none either. */
     private @Nullable Task withdraw(TaskContext ctx, VillageData village, Item item) {
         ServerLevel level = ctx.level();
@@ -246,8 +274,9 @@ public final class PathWork implements Job {
             return;
         }
         if (!routes.containsKey(origin)) {
-            // dropRoute already ran (RequireClearable found the cell no longer clearable): the route is already
-            // gone and will be recomputed, so this failure is not one more of the MAX_CONSECUTIVE_FAILURES kind.
+            // dropRoute already ran (RequireClearable or RequireDirt found the cell no longer clearable or dirt-like):
+            // the route is already gone and will be recomputed, so this failure is not one more of the
+            // MAX_CONSECUTIVE_FAILURES kind.
             return;
         }
         if (failures.merge(origin, 1, Integer::sum) >= MAX_CONSECUTIVE_FAILURES) {

@@ -5,6 +5,7 @@ import dev.andreymudri.villagercity.citizen.TaskContext;
 import dev.andreymudri.villagercity.citizen.WorldPermissions;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -12,8 +13,10 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 
 /**
- * Converts a dirt-like ground block to a dirt path, as a shovel does. Fails without changing anything when the cell
- * above {@code pos} (where a villager walks) is not air, or when {@link WorldPermissions#mayGrief} refuses.
+ * Converts a dirt-like ground block to a dirt path, as a shovel does. Fails without changing anything when {@code
+ * pos} is no longer {@link BlockTags#DIRT} (a player's block placed there since the cell was planned, say), when the
+ * cell above {@code pos} (where a villager walks) is not air, when {@link WorldPermissions#mayBreak} refuses to let
+ * the paver destroy what is there, or when {@link WorldPermissions#mayGrief} refuses.
  */
 public final class MakePath implements Task {
     private final BlockPos pos;
@@ -35,10 +38,14 @@ public final class MakePath implements Task {
         if (current.is(Blocks.DIRT_PATH)) {
             return Status.SUCCESS;
         }
+        if (!current.is(BlockTags.DIRT)) {
+            // A block placed here since this cell was planned (a player's block, say) must never be paved over.
+            return Status.FAILED;
+        }
         if (!level.getBlockState(pos.above()).isAir()) {
             return Status.FAILED;
         }
-        if (!WorldPermissions.mayGrief(level, villager)) {
+        if (!WorldPermissions.mayBreak(level, villager, pos) || !WorldPermissions.mayGrief(level, villager)) {
             return Status.FAILED;
         }
         BlockState pathState = Blocks.DIRT_PATH.defaultBlockState();

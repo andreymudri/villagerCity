@@ -339,6 +339,61 @@ public final class PathTests {
         });
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_makepath_approach", timeoutTicks = 6000)
+    public static void neverPavesOverABlockPlacedDuringTheApproach(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        ServerLevel level = helper.getLevel();
+        BlockPos storehouseAbs = helper.absolutePos(new BlockPos(4, 1, 24));
+        Villager villager = enrollPaver(helper, village, 12, 1, 20);
+        AtomicBoolean placed = new AtomicBoolean();
+        AtomicReference<BlockPos> supportPos = new AtomicReference<>();
+        AtomicReference<Task> approachTask = new AtomicReference<>();
+        // The whole area is flat, obstacle-free grass, so every cell (past the raised door step) is a MakePath cell:
+        // this catches the paver still walking to one, more than 3 blocks away, before MakePath (or its RequireDirt
+        // re-check) ever runs, mirroring neverBreaksAChestPlacedDuringTheApproach for the placement side. The
+        // storehouse also sits on grass, so its own withdrawal walk (also a MoveTo in a TaskSequence) is excluded
+        // explicitly, or it is mistaken for a MakePath approach too.
+        helper.onEachTick(() -> {
+            if (placed.get()) {
+                return;
+            }
+            Task current = villager.getData(CitizenAttachments.RUNTIME).currentTask();
+            if (!(current instanceof TaskSequence seq) || !(seq.currentStep() instanceof MoveTo move)) {
+                return;
+            }
+            BlockPos target = move.target();
+            if (target.equals(storehouseAbs)) {
+                return;
+            }
+            BlockPos support = target.below();
+            if (!level.getBlockState(support).is(Blocks.GRASS_BLOCK)) {
+                return;
+            }
+            if (villager.distanceToSqr(Vec3.atCenterOf(target)) <= 9.0) {
+                return;
+            }
+            level.setBlock(support, Blocks.DIAMOND_BLOCK.defaultBlockState(), 3);
+            supportPos.set(support.immutable());
+            approachTask.set(current);
+            placed.set(true);
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(placed.get(), "diamond block was never placed during the paver's approach");
+            // Wait for the very task instance that was walking toward the obstructed cell to finish (success or
+            // failure): checking survival any earlier would trivially pass while the paver has not reached it yet.
+            helper.assertTrue(villager.getData(CitizenAttachments.RUNTIME).currentTask() != approachTask.get(),
+                    "the paver has not yet finished approaching the obstructed cell");
+            BlockPos support = supportPos.get();
+            helper.assertTrue(level.getBlockState(support).is(Blocks.DIAMOND_BLOCK), "block placed during the approach was paved over");
+            helper.assertFalse(village.pathCells().contains(support.above()), "the obstructed cell was recorded as a laid path cell");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_chest_not_recorded", timeoutTicks = 6000)
     public static void obstructedCellIsNeverRecordedAsPath(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
