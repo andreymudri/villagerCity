@@ -386,6 +386,32 @@ public final class TreeIdentityTests {
         helper.succeed();
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_identity_log_floor")
+    public static void aGroundLayerWiderThan2x2IsNotATrunk(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        List<String> accepted = new ArrayList<>();
+        int x = 6;
+        for (int[] floor : new int[][] {{3, 1}, {1, 3}, {3, 3}, {2, 2}}) {
+            BlockPos base = new BlockPos(x, 1, 10);
+            for (int dx = 0; dx < floor[0]; dx++) {
+                for (int dz = 0; dz < floor[1]; dz++) {
+                    helper.setBlock(base.offset(dx, 0, dz), Blocks.OAK_LOG);
+                }
+            }
+            for (int y = 1; y <= 4; y++) {
+                helper.setBlock(base.above(y), Blocks.OAK_LOG);
+            }
+            canopy(helper, base.above(4));
+            if (TreeFinder.trunk(level, helper.absolutePos(base)).isPresent()) {
+                accepted.add(floor[0] + "x" + floor[1]);
+            }
+            x += 10;
+        }
+        helper.assertTrue(accepted.equals(List.of("2x2")), "ground layers accepted as trunks: " + accepted + " (only 2x2 expected)");
+        helper.succeed();
+    }
+
     /** Natural oak leaves in a 3x3 around and above the top log. */
     private static void canopy(GameTestHelper helper, BlockPos top) {
         for (int dx = -1; dx <= 1; dx++) {
@@ -737,6 +763,27 @@ public final class TreeIdentityTests {
             helper.assertTrue(standing, "tree on the pillar was felled; the test needs an unreachable tree");
             helper.assertTrue(felling.isEmpty(), "unreachable tree remembered as felling " + felling);
             helper.succeed();
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_identity_stale_felling", timeoutTicks = 400)
+    public static void fellingsWhoseBaseIsGoneAreForgotten(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 6, false);
+        BlockPos gone = helper.absolutePos(new BlockPos(30, 1, 30));
+        BlockPos standing = new BlockPos(34, 1, 30);
+        helper.setBlock(standing, Blocks.OAK_LOG);
+        BlockPos unloaded = gone.offset(160_000, 0, 160_000);
+        List.of(gone, helper.absolutePos(standing), unloaded).forEach(village::startFelling);
+        Villager villager = GameTestSupport.spawnVillager(helper, 20, 1, 20);
+        CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, new ItemStack(Items.STONE_AXE), new LumberjackJob());
+        helper.succeedWhen(() -> {
+            helper.assertTrue(!village.isFelling(gone), "felling of a base that is gone still remembered");
+            helper.assertTrue(village.isFelling(helper.absolutePos(standing)), "felling of a standing base forgotten");
+            helper.assertTrue(village.isFelling(unloaded), "felling in an unloaded chunk forgotten");
+            helper.assertTrue(level.getChunkSource().getChunkNow(unloaded.getX() >> 4, unloaded.getZ() >> 4) == null, "felling check loaded a chunk");
+            VillageTestSupport.remove(helper, village);
         });
     }
 

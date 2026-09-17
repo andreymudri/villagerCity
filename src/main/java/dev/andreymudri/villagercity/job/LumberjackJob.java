@@ -95,9 +95,6 @@ public final class LumberjackJob implements Job {
         if (target != null && (status == Task.Status.FAILED || TreeFinder.shape(ctx.level(), target).isPresent())) {
             avoidUntil.put(target, ctx.gameTime() + AVOID_TICKS);
         }
-        if (target != null && !ctx.level().getBlockState(target).is(BlockTags.LOGS)) {
-            forgetFelling(ctx, target);
-        }
         target = null;
     }
 

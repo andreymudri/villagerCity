@@ -34,7 +34,7 @@ import net.neoforged.neoforge.event.level.PistonEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 /**
- * Positions of logs an entity (a player or a citizen) placed in one level, saved as data/villagercity_placed_logs.dat.
+ * Positions of logs placed in one level (by a player, a citizen, or a modded block placer), saved as data/villagercity_placed_logs.dat.
  * The lumberjack never fells a tree touching one. Placements are recorded after every other listener had its chance
  * to cancel them, and pistons carry an entry along with its log. A tree grown with bone meal is not a placement, and
  * clears any entry it grows over. An entry is forgotten only once its position no longer holds a log: at the end of
@@ -80,7 +80,8 @@ public final class PlacedLogs extends SavedData {
 
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onPlace(BlockEvent.EntityPlaceEvent event) {
-        if (event.getEntity() == null || !(event.getLevel() instanceof ServerLevel level)) {
+        // Any placement counts, also one with no entity (a modded block placer): only growth is not a build.
+        if (!(event.getLevel() instanceof ServerLevel level)) {
             return;
         }
         PlacedLogs logs = get(level);
@@ -146,8 +147,8 @@ public final class PlacedLogs extends SavedData {
     }
 
     /**
-     * Moves the entry of every noted log the piston actually carried one block along its motion: its position no longer
-     * holds a log, and the next one holds a moving block carrying a log, which can only have come from it.
+     * Moves the entry of every noted log the piston actually carried one block along its motion: the next
+     * position holds a moving block carrying a log, which can only have come from it.
      */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onPistonPost(PistonEvent.Post event) {
@@ -163,8 +164,7 @@ public final class PlacedLogs extends SavedData {
         List<BlockPos> moved = new ArrayList<>();
         for (BlockPos from : push.from()) {
             BlockPos to = from.relative(push.motion());
-            if (!level.getBlockState(from).is(BlockTags.LOGS)
-                    && level.getBlockEntity(to) instanceof PistonMovingBlockEntity moving
+            if (level.getBlockEntity(to) instanceof PistonMovingBlockEntity moving
                     && moving.getMovedState().is(BlockTags.LOGS)) {
                 logs.remove(from);
                 moved.add(to);

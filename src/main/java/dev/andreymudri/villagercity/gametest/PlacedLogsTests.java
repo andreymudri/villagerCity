@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
@@ -117,6 +118,11 @@ public final class PlacedLogsTests {
         placeAs(level, player, List.of(pos), Blocks.STONE.defaultBlockState());
         boolean forgotten = !PlacedLogs.get(level).contains(pos);
         level.getServer().getPlayerList().remove(player);
+        BlockPos machine = helper.absolutePos(new BlockPos(12, 1, 10));
+        placeAs(level, null, List.of(machine), Blocks.OAK_LOG.defaultBlockState());
+        boolean machineRemembered = PlacedLogs.get(level).contains(machine);
+        PlacedLogs.get(level).remove(machine);
+        helper.assertTrue(machineRemembered, "log placed with no entity (a modded placer) not remembered");
         helper.assertTrue(remembered, "placed log not remembered");
         helper.assertTrue(forgotten, "log replaced by a placed stone still remembered");
         helper.succeed();
@@ -332,7 +338,7 @@ public final class PlacedLogsTests {
     }
 
     /** Places the state at every position as one player placement: a single or a multi-block place event. */
-    private static void placeAs(ServerLevel level, ServerPlayer player, List<BlockPos> positions, BlockState state) {
+    private static void placeAs(ServerLevel level, @Nullable ServerPlayer player, List<BlockPos> positions, BlockState state) {
         List<BlockSnapshot> snapshots = new ArrayList<>();
         for (BlockPos pos : positions) {
             snapshots.add(BlockSnapshot.create(level.dimension(), level, pos));
