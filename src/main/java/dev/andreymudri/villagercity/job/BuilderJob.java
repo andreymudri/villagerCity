@@ -241,10 +241,10 @@ public final class BuilderJob implements Job {
 
     /** What the storehouse lacks of {@code wanted}, as "item xN" pairs. */
     private static String shortfall(ServerLevel level, BlockPos storehouse, Map<Item, Integer> wanted) {
-        Map<Item, Integer> have = level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity ? entity.counts() : Map.of();
+        Map<Item, Long> have = level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity ? entity.counts() : Map.of();
         return wanted.entrySet().stream()
-                .filter(entry -> have.getOrDefault(entry.getKey(), 0) < entry.getValue())
-                .map(entry -> BuiltInRegistries.ITEM.getKey(entry.getKey()).getPath() + " x" + (entry.getValue() - have.getOrDefault(entry.getKey(), 0)))
+                .filter(entry -> have.getOrDefault(entry.getKey(), 0L) < entry.getValue())
+                .map(entry -> BuiltInRegistries.ITEM.getKey(entry.getKey()).getPath() + " x" + (entry.getValue() - have.getOrDefault(entry.getKey(), 0L)))
                 .collect(Collectors.joining(", "));
     }
 

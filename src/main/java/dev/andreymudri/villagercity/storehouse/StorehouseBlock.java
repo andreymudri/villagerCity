@@ -6,6 +6,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Containers;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.RenderShape;
@@ -50,18 +51,18 @@ public class StorehouseBlock extends BaseEntityBlock {
     @Override
     public BlockState playerWillDestroy(Level level, BlockPos pos, BlockState state, Player player) {
         if (level instanceof ServerLevel serverLevel && level.getBlockEntity(pos) instanceof StorehouseBlockEntity storehouse) {
-            long total = 0;
-            for (int i = 0; i < StorehouseBlockEntity.SIZE; i++) {
-                total += storehouse.getItem(i).getCount();
-            }
-            StorehouseMenu.chargeDebt(serverLevel, pos, player.getUUID(), total);
+            StorehouseMenu.chargeDebt(serverLevel, pos, player.getUUID(), storehouse.total());
         }
         return super.playerWillDestroy(level, pos, state, player);
     }
 
     @Override
     protected void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean movedByPiston) {
-        Containers.dropContentsOnDestroy(state, newState, level, pos);
+        if (!state.is(newState.getBlock()) && level.getBlockEntity(pos) instanceof StorehouseBlockEntity storehouse) {
+            for (ItemStack stack : storehouse.removeAllAsStacks()) {
+                Containers.dropItemStack(level, pos.getX(), pos.getY(), pos.getZ(), stack);
+            }
+        }
         super.onRemove(state, level, pos, newState, movedByPiston);
     }
 }

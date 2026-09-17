@@ -15,10 +15,17 @@ command it RTS-style.
 
 - **Village detection:** every 5 seconds, any vanilla village (a bell with a villager nearby) within 128 blocks
   of a player is registered.
-- **Storehouse:** the village places a 27-slot storehouse near its bell. Items a player moves in by clicking are
-  recorded in a per-player contribution ledger. Items a player takes out become that player's debt, which later
-  deposits repay before they earn credit. Hoppers can insert but not extract, a player who breaks the storehouse
-  owes everything that was inside, and explosions, withers and the ender dragon cannot break it.
+- **Storehouse:** the village places a storehouse near its bell. It holds any number of each item, one entry per
+  item (named or enchanted items get their own entry), in a scrollable screen showing the counts.
+  - Taking items: left click takes a stack, right click takes half a stack, and shift-click takes as many as fit
+    in your inventory.
+  - Storing items: click the grid with a stack on the cursor to store it (right click stores one), or shift-click
+    a stack in your inventory.
+  - Credit and debt: items a player stores are recorded in a per-player contribution ledger. Items a player takes
+    out become that player's debt, which later deposits repay before they earn credit.
+  - Protection: hoppers and item pipes can insert but not extract, a player who breaks the storehouse owes
+    everything that was inside, and explosions, withers and the ender dragon cannot break it. Storehouses from
+    older saves keep their contents.
 - **World rules:** citizens only break or place blocks when `doMobGriefing` is on and no protection event
   cancels the change.
 - **Jobs:** the first two adult villagers with no vanilla profession become a **lumberjack** (given a stone axe)
@@ -115,6 +122,7 @@ into `~/.minecraft/mods/`.
 ## Known issues
 
 - A player can withdraw storehouse items and hand them to another player, who earns deposit credit for them.
+- Breaking a storehouse that holds a lot drops everything as item entities, which can lag the game.
 - A player can mine blocks the builder placed and deposit them for credit.
 - Villagers with nothing to do stand still instead of returning to their vanilla routine.
 - A plot the builder gives up on three times is left as a partial ruin, and the next house again needs a full
@@ -137,7 +145,8 @@ src/main/java/dev/andreymudri/villagercity/
   citizen/      citizen attachment, task scheduler, primitive tasks (move, break, place, pick up, deposit, withdraw)
   job/          lumberjack and builder jobs, tree finder
   blueprint/    structure-template blueprints and their material lists
-  storehouse/   storehouse block, block entity, placement
+  storehouse/   storehouse block, block entity, menu, network payloads, placement
+  client/       storehouse screen
   command/      /villagercity debug command
   gametest/     in-game GameTests
 src/test/java/  JUnit tests for pure logic

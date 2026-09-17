@@ -144,7 +144,7 @@ public final class VillageCommand {
         return line.toString();
     }
 
-    private static String format(Map<Item, Integer> counts) {
+    private static String format(Map<Item, Long> counts) {
         if (counts.isEmpty()) {
             return "empty";
         }
