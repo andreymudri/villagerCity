@@ -196,4 +196,51 @@ public final class SitePrepTests {
             helper.succeed();
         });
     }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_siteprep_flower_gap", timeoutTicks = 3000, skyAccess = true)
+    public static void levelsAGapCoveredByAFlower(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 12, false);
+        int floor = 5;
+        BlockPos origin = new BlockPos(10, floor, 10);
+        village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(origin), new Vec3i(3, 1, 3), null, 0L, 0, false));
+        platform(helper, floor, 5, 5, 25, 25);
+        // A one-block gap under the plot, covered by a poppy: natural vegetation the paver must break before filling,
+        // not a solid cell PlaceBlock could ever succeed on directly.
+        BlockPos gap = new BlockPos(11, floor - 1, 11);
+        helper.setBlock(11, floor - 2, 11, Blocks.STONE);
+        helper.setBlock(gap, Blocks.POPPY);
+        storehouseWith(helper, village, new BlockPos(20, floor, 20), Items.DIRT, 64);
+        pavingVillager(helper, 16, floor, 16, village);
+        helper.succeedWhen(() -> {
+            Plot plot = village.plots().get(0);
+            helper.assertTrue(plot.prepared(), "not prepared yet");
+            helper.assertBlockPresent(Blocks.DIRT, gap);
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_siteprep_torch_gap", timeoutTicks = 1200, skyAccess = true)
+    public static void neverBreaksATorchInTheFillGap(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 12, false);
+        int floor = 5;
+        BlockPos origin = new BlockPos(10, floor, 10);
+        village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(origin), new Vec3i(3, 1, 3), null, 0L, 0, false));
+        platform(helper, floor, 5, 5, 25, 25);
+        // A player's torch sits in the same kind of gap; it has no collision either, but it is not natural vegetation
+        // and must be left alone, counted as an obstruction instead of a fill target.
+        BlockPos torch = new BlockPos(11, floor - 1, 11);
+        helper.setBlock(11, floor - 2, 11, Blocks.STONE);
+        helper.setBlock(torch, Blocks.TORCH);
+        storehouseWith(helper, village, new BlockPos(20, floor, 20), Items.DIRT, 64);
+        pavingVillager(helper, 16, floor, 16, village);
+        helper.runAfterDelay(800, () -> {
+            boolean prepared = village.plots().get(0).prepared();
+            VillageTestSupport.remove(helper, village);
+            helper.assertBlockPresent(Blocks.TORCH, torch);
+            helper.assertTrue(!prepared, "plot prepared despite the torch in the fill gap");
+            helper.succeed();
+        });
+    }
 }

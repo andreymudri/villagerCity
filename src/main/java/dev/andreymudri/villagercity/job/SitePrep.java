@@ -81,8 +81,16 @@ public final class SitePrep implements Job {
             return TaskSequence.of(MoveTo.digOut(cutCell, BuilderJob.WORK_REACH), new BreakBlock(cutCell), new PickUpItems(cutCell, 2.0, FillMaterials::isFill));
         }
 
-        BlockPos fillCell = findFillCandidate(level, area, floor);
-        if (fillCell != null) {
+        FillTarget fillTarget = findFillCandidate(level, area, floor);
+        if (fillTarget == null && hasFillObstruction(level, area, floor)) {
+            recordFailure(now, plot.id());
+            return null;
+        }
+        if (fillTarget != null) {
+            BlockPos fillCell = fillTarget.pos();
+            if (fillTarget.needsClearing()) {
+                return TaskSequence.of(MoveTo.digOut(fillCell, BuilderJob.WORK_REACH), new BreakBlock(fillCell));
+            }
             Optional<BlockState> fillState = FillMaterials.choose(inventory);
             if (fillState.isPresent()) {
                 BlockState state = fillState.get();
@@ -190,8 +198,16 @@ public final class SitePrep implements Job {
         return floor - 1;
     }
 
-    /** The lowest open cell below the floor, down to each column's ground, across the whole area. */
-    private static @Nullable BlockPos findFillCandidate(ServerLevel level, Footprint area, int floor) {
+    /** A cell to fill: {@code needsClearing} when it holds natural vegetation the paver must break before placing. */
+    private record FillTarget(BlockPos pos, boolean needsClearing) {
+    }
+
+    /**
+     * The lowest cell below the floor, down to each column's ground, that is either already open (air, fluid or
+     * replaceable vegetation like grass) or covered by natural vegetation the cutting pass would also take (flowers,
+     * saplings). A cell with no collision shape that is neither (a torch, a player's block) is never a candidate here.
+     */
+    private static @Nullable FillTarget findFillCandidate(ServerLevel level, Footprint area, int floor) {
         for (int y = floor - MAX_DROP; y < floor; y++) {
             for (int x = area.minX(); x <= area.maxX(); x++) {
                 for (int z = area.minZ(); z <= area.maxZ(); z++) {
@@ -199,13 +215,44 @@ public final class SitePrep implements Job {
                         continue;
                     }
                     BlockPos pos = new BlockPos(x, y, z);
-                    if (level.getBlockState(pos).getCollisionShape(level, pos).isEmpty()) {
-                        return pos;
+                    BlockState state = level.getBlockState(pos);
+                    if (!state.getCollisionShape(level, pos).isEmpty()) {
+                        continue;
+                    }
+                    if (state.is(BlockTags.REPLACEABLE)) {
+                        return new FillTarget(pos, false);
+                    }
+                    if (isClearableVegetation(state)) {
+                        return new FillTarget(pos, true);
                     }
                 }
             }
         }
         return null;
+    }
+
+    /** True when some cell in the fillable range has no collision shape but is neither open nor clearable vegetation. */
+    private static boolean hasFillObstruction(ServerLevel level, Footprint area, int floor) {
+        for (int y = floor - MAX_DROP; y < floor; y++) {
+            for (int x = area.minX(); x <= area.maxX(); x++) {
+                for (int z = area.minZ(); z <= area.maxZ(); z++) {
+                    if (y < columnGround(level, x, z, floor)) {
+                        continue;
+                    }
+                    BlockPos pos = new BlockPos(x, y, z);
+                    BlockState state = level.getBlockState(pos);
+                    if (state.getCollisionShape(level, pos).isEmpty() && !state.is(BlockTags.REPLACEABLE) && !isClearableVegetation(state)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /** Natural growth a paver clears like the cutting pass clears a mound: flowers and saplings, never player builds. */
+    private static boolean isClearableVegetation(BlockState state) {
+        return state.is(BlockTags.FLOWERS) || state.is(BlockTags.SAPLINGS);
     }
 
     /** The first free y below the floor: one above the first solid block found searching down, capped at {@code floor - MAX_DROP}. */
