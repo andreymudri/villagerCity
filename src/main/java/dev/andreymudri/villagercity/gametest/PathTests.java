@@ -5,16 +5,20 @@ import dev.andreymudri.villagercity.blueprint.Blueprint;
 import dev.andreymudri.villagercity.blueprint.BlueprintPlacement;
 import dev.andreymudri.villagercity.blueprint.Blueprints;
 import dev.andreymudri.villagercity.citizen.JobType;
+import dev.andreymudri.villagercity.job.PathRoute;
 import dev.andreymudri.villagercity.job.PathWork;
 import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.storehouse.StorehouseContent;
 import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -209,6 +213,104 @@ public final class PathTests {
             helper.assertFalse(anyPath, "a path was laid despite the bell being walled off");
             VillageTestSupport.remove(helper, village);
             helper.succeed();
+        });
+    }
+
+    /** The cell just outside the starter house's door, per {@code doorOutside}: (10, 2, 8) is the door's lower half,
+     * facing south (into the house), so (10, 2, 7) is the cell outside it. */
+    private static final BlockPos DOOR_OUTSIDE = new BlockPos(10, 2, 7);
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_chest_door", timeoutTicks = 4000)
+    public static void neverBreaksAChestAtTheDoor(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        BlockPos chest = helper.absolutePos(DOOR_OUTSIDE);
+        helper.setBlock(DOOR_OUTSIDE, Blocks.CHEST);
+        enrollPaver(helper, village, 12, 1, 20);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(helper.getLevel().getBlockState(chest).is(Blocks.CHEST), "chest at the door was broken");
+            helper.assertTrue(village.pathQueue().isEmpty(), "path never abandoned");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_chest_route", timeoutTicks = 6000)
+    public static void neverBreaksAChestOnACachedRoute(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        BlockPos bell = helper.absolutePos(bellRelative);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        ServerLevel level = helper.getLevel();
+        // The same route PathWork itself will compute and cache on its first plan(), from the same clear terrain:
+        // a pure, side-effect-free query, so predicting it this way does not disturb what PathWork later finds.
+        List<PathRoute.Cell> predicted = PathRoute.find(level, village, helper.absolutePos(DOOR_OUTSIDE), village.center())
+                .orElseThrow(() -> new IllegalStateException("no route to predict"));
+        BlockPos target = predicted.get(Math.min(6, predicted.size() - 1)).surface();
+        enrollPaver(helper, village, 12, 1, 20);
+        AtomicBoolean chestPlaced = new AtomicBoolean();
+        helper.onEachTick(() -> {
+            if (!chestPlaced.get() && !village.pathCells().isEmpty()) {
+                level.setBlock(target, Blocks.CHEST.defaultBlockState(), 3);
+                chestPlaced.set(true);
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(chestPlaced.get(), "chest was never placed on the cached route");
+            helper.assertTrue(level.getBlockState(target).is(Blocks.CHEST), "chest on the cached route was broken");
+            helper.assertTrue(village.pathQueue().isEmpty(), "path still queued");
+            helper.assertTrue(reachedBell(village, bell), "path never reaches within 2 of the bell");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_resume", timeoutTicks = 8000)
+    public static void resumesAfterAFreshJobMidPath(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        BlockPos bell = helper.absolutePos(bellRelative);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        Villager villager = enrollPaver(helper, village, 12, 1, 20);
+        AtomicBoolean swapped = new AtomicBoolean();
+        helper.onEachTick(() -> {
+            if (!swapped.get() && village.pathCells().size() >= 3) {
+                CitizenTestSupport.enroll(villager, village, JobType.PAVER, new ItemStack(Items.STONE_PICKAXE), new PathWork());
+                swapped.set(true);
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(swapped.get(), "job was never swapped mid-path");
+            helper.assertTrue(village.pathQueue().isEmpty(), "path still queued");
+            helper.assertTrue(reachedBell(village, bell), "path never reaches within 2 of the bell");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_grass", timeoutTicks = 6000)
+    public static void clearsShortGrassBeforePaving(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                helper.setBlock(x, 1, z, Blocks.SHORT_GRASS);
+            }
+        }
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        BlockPos bell = helper.absolutePos(bellRelative);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        enrollPaver(helper, village, 12, 1, 20);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.pathQueue().isEmpty(), "path still queued");
+            helper.assertFalse(village.pathCells().isEmpty(), "no path cells laid");
+            helper.assertTrue(reachedBell(village, bell), "path never reaches within 2 of the bell");
+            VillageTestSupport.remove(helper, village);
         });
     }
 }

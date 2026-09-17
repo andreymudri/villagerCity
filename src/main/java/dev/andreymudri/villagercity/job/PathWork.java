@@ -7,6 +7,7 @@ import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
 import dev.andreymudri.villagercity.citizen.TaskSequence;
 import dev.andreymudri.villagercity.citizen.task.BreakBlock;
+import dev.andreymudri.villagercity.citizen.task.DigStep;
 import dev.andreymudri.villagercity.citizen.task.MoveTo;
 import dev.andreymudri.villagercity.citizen.task.PickUpItems;
 import dev.andreymudri.villagercity.citizen.task.PlaceBlock;
@@ -43,7 +44,9 @@ import net.minecraft.world.phys.Vec3;
  * The paver's path work: finds a route ({@link PathRoute}) from each queued house's door to the bell and lays it one
  * cell at a time, clearing headroom, placing dirt or oak plank support where the ground is uneven or wet, and
  * surfacing dirt-like support with {@link MakePath}. Routes are cached per house origin until the house's path is
- * finished or abandoned.
+ * finished or abandoned. Only natural ground the paver can dig, or vegetation a placement can replace, is ever
+ * broken; a block that is neither (a player's chest, say) drops the cached route instead, so the next plan() call
+ * searches a route around it rather than through it.
  */
 public final class PathWork implements Job {
     /** Consecutive failed build tasks on the same house's path before it is moved to the end of the queue. */
@@ -125,8 +128,20 @@ public final class PathWork implements Job {
         BlockPos surface = cell.surface();
         BlockPos support = surface.below();
 
-        BlockPos headroom = firstBlocked(level, surface);
+        BlockPos headroom = firstOccupied(level, surface);
         if (headroom != null) {
+            if (!clearable(level, headroom)) {
+                // A block that is neither natural ground nor replaceable vegetation (a player's chest, for example)
+                // must never be broken. The cached route may have been planned before it appeared, or may have
+                // started right on it, so drop it and let the next plan() recompute a route around the obstruction.
+                VillagerCity.LOGGER.info("a block at {} blocks the path from the house at {} to the bell; recomputing the route",
+                        headroom, current);
+                if (current != null) {
+                    routes.remove(current);
+                    failures.remove(current);
+                }
+                return null;
+            }
             building = true;
             return dig(headroom);
         }
@@ -267,15 +282,19 @@ public final class PathWork implements Job {
                 && level.getBlockState(feet.below()).isFaceSturdy(level, feet.below(), Direction.UP);
     }
 
-    /** The first of {@code surface} and {@code surface.above()} that is neither open nor already clear. */
-    private static @Nullable BlockPos firstBlocked(ServerLevel level, BlockPos surface) {
+    /** The first of {@code surface} and {@code surface.above()} that is not air. */
+    private static @Nullable BlockPos firstOccupied(ServerLevel level, BlockPos surface) {
         for (BlockPos pos : new BlockPos[] {surface, surface.above()}) {
-            BlockState state = level.getBlockState(pos);
-            if (!state.isAir() && !state.canBeReplaced()) {
+            if (!level.getBlockState(pos).isAir()) {
                 return pos;
             }
         }
         return null;
+    }
+
+    /** Whether the paver may clear {@code pos}: natural ground it can dig, or vegetation a placement can replace. */
+    private static boolean clearable(ServerLevel level, BlockPos pos) {
+        return DigStep.isDiggable(level, pos) || level.getBlockState(pos).canBeReplaced();
     }
 
     /** The nearest block below {@code support} the paver must break through to reach solid ground, within {@link #MAX_CUT_DEPTH}. */

@@ -3,14 +3,18 @@ package dev.andreymudri.villagercity.job;
 import dev.andreymudri.villagercity.citizen.task.DigStep;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.PriorityQueue;
+import java.util.Set;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -78,7 +82,11 @@ public final class PathRoute {
         if (!startGround.present()) {
             return Optional.empty();
         }
+        if (blocked(level, start) || blocked(level, start.above())) {
+            return Optional.empty();
+        }
         List<Footprint> occupied = village.occupiedFootprints();
+        Set<Long> ownPrefix = ownPrefixColumns(village, start);
         State startState = new State(start.getX(), start.getZ(), start.getY());
         Node startNode = new Node(startState, 0, kindOf(start.getY(), startGround), 0, null);
 
@@ -97,7 +105,7 @@ public final class PathRoute {
                 continue;
             }
             expanded++;
-            if (reachedGoal(node.state, goal, village)) {
+            if (reachedGoal(node.state, goal, village, ownPrefix)) {
                 return Optional.of(reconstruct(node));
             }
             if (node.depth >= MAX_STEPS) {
@@ -146,10 +154,47 @@ public final class PathRoute {
         return Math.abs(state.x() - goal.getX()) + Math.abs(state.z() - goal.getZ());
     }
 
-    private static boolean reachedGoal(State state, BlockPos goal, VillageData village) {
+    /**
+     * Reached when within {@link #GOAL_RADIUS} of {@code goal}, or on a path column that is not part of
+     * {@code ownPrefix}. Without excluding it, a route recomputed mid-build (a fresh job, or after enough
+     * failures re-queue the house) starts on the door cell it already laid, calls that one cell a finished route,
+     * and the house leaves the queue with its path unfinished.
+     */
+    private static boolean reachedGoal(State state, BlockPos goal, VillageData village, Set<Long> ownPrefix) {
         int dx = Math.abs(state.x() - goal.getX());
         int dz = Math.abs(state.z() - goal.getZ());
-        return Math.max(dx, dz) <= GOAL_RADIUS || village.isPathColumn(state.x(), state.z());
+        if (Math.max(dx, dz) <= GOAL_RADIUS) {
+            return true;
+        }
+        return village.isPathColumn(state.x(), state.z()) && !ownPrefix.contains(BlockPos.asLong(state.x(), 0, state.z()));
+    }
+
+    /**
+     * The columns of an already-laid path reachable from {@code start} by walking only through other laid path
+     * columns: this house's own unfinished work (or empty when {@code start} itself is not yet a path column).
+     */
+    private static Set<Long> ownPrefixColumns(VillageData village, BlockPos start) {
+        Set<Long> visited = new HashSet<>();
+        if (!village.isPathColumn(start.getX(), start.getZ())) {
+            return visited;
+        }
+        visited.add(BlockPos.asLong(start.getX(), 0, start.getZ()));
+        Deque<int[]> queue = new ArrayDeque<>();
+        queue.add(new int[] {start.getX(), start.getZ()});
+        while (!queue.isEmpty() && visited.size() <= MAX_EXPANDED) {
+            int[] xz = queue.poll();
+            for (Direction direction : Direction.Plane.HORIZONTAL) {
+                int nx = xz[0] + direction.getStepX();
+                int nz = xz[1] + direction.getStepZ();
+                long packed = BlockPos.asLong(nx, 0, nz);
+                if (visited.contains(packed) || !village.isPathColumn(nx, nz)) {
+                    continue;
+                }
+                visited.add(packed);
+                queue.add(new int[] {nx, nz});
+            }
+        }
+        return visited;
     }
 
     private static boolean insideAny(List<Footprint> footprints, int x, int z) {
