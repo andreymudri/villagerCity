@@ -3,6 +3,7 @@ package dev.andreymudri.villagercity.storehouse;
 import dev.andreymudri.villagercity.citizen.WorldPermissions;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.plot.PlotPlanner;
+import java.util.Optional;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.server.level.ServerLevel;
@@ -12,6 +13,8 @@ import net.neoforged.neoforge.common.util.BlockSnapshot;
 
 public final class StorehouseService {
     private static final Vec3i SIZE = new Vec3i(1, 1, 1);
+    /** How long a village waits between searches for a storehouse spot. */
+    public static final int SEARCH_RETRY_TICKS = 200;
 
     private StorehouseService() {
     }
@@ -29,13 +32,17 @@ public final class StorehouseService {
             }
             village.setStorehousePos(null);
         }
-        if (!WorldPermissions.mayGrief(level, null)) {
+        if (!WorldPermissions.mayGrief(level, null) || level.getGameTime() < village.nextStorehouseSearch()) {
             return;
         }
-        PlotPlanner.find(level, village, SIZE, spot -> {
+        Optional<BlockPos> found = PlotPlanner.find(level, village, SIZE, spot -> {
             BlockState existing = level.getBlockState(spot);
             return existing.isAir() || existing.canBeReplaced();
-        }).ifPresent(spot -> {
+        });
+        if (found.isEmpty()) {
+            village.setNextStorehouseSearch(level.getGameTime() + SEARCH_RETRY_TICKS);
+        }
+        found.ifPresent(spot -> {
             BlockSnapshot snapshot = WorldPermissions.snapshot(level, spot);
             level.setBlock(spot, StorehouseContent.BLOCK.get().defaultBlockState(), Block.UPDATE_ALL);
             if (WorldPermissions.placementCancelled(null, snapshot)) {

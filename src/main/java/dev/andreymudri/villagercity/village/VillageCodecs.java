@@ -47,9 +47,10 @@ public final class VillageCodecs {
             Codec.unboundedMap(UUIDUtil.STRING_CODEC, JobType.CODEC).optionalFieldOf("citizens", Map.of()).forGetter(VillageData::citizens),
             Codec.unboundedMap(UUIDUtil.STRING_CODEC, Codec.LONG).optionalFieldOf("storehouse_debt", Map.of()).forGetter(VillageData::storehouseDebt),
             BlockPos.CODEC.listOf().optionalFieldOf("felling", List.of()).forGetter(VillageData::felling),
+            BlockPos.CODEC.listOf().optionalFieldOf("failed_plots", List.of()).forGetter(VillageData::failedPlots),
             Codec.BOOL.optionalFieldOf("managed", true).forGetter(VillageData::managed)
-    ).apply(i, (id, center, radius, age, storehouse, houses, plots, ledger, citizens, storehouseDebt, felling, managed) ->
-            new VillageData(id, center, radius, age, storehouse.orElse(null), houses, plots, ledger, citizens, storehouseDebt, felling, managed)));
+    ).apply(i, (id, center, radius, age, storehouse, houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, managed) ->
+            new VillageData(id, center, radius, age, storehouse.orElse(null), houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, managed)));
 
     private VillageCodecs() {
     }

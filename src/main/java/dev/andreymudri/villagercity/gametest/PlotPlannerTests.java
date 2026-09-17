@@ -1,16 +1,19 @@
 package dev.andreymudri.villagercity.gametest;
 
 import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.storehouse.StorehouseService;
 import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.plot.PlotPlanner;
 import dev.andreymudri.villagercity.village.plot.PlotRules;
+import java.util.Optional;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -43,6 +46,58 @@ public final class PlotPlannerTests {
         helper.assertTrue(relative.getX() >= 2 && relative.getX() <= 41 && relative.getZ() >= 2 && relative.getZ() <= 41,
                 "plot outside the search reach: " + relative);
         helper.assertFalse(PlotRules.overlapsAny(Footprint.of(origin, HOUSE), village.occupiedFootprints()), "plot overlaps the bell");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void findsGroundWellBelowARaisedBell(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // A bell on a hill 11 blocks above the village's flat ground, the hill filling the middle of the area.
+        for (int x = 14; x <= 34; x++) {
+            for (int z = 14; z <= 34; z++) {
+                for (int y = 1; y <= 11; y++) {
+                    helper.setBlock(x, y, z, Blocks.DIRT_PATH);
+                }
+            }
+        }
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(24, 12, 24)), 4);
+        BlockPos origin = PlotPlanner.find(helper.getLevel(), village, HOUSE).orElseThrow(() -> new AssertionError("no plot found below the raised bell"));
+        helper.assertTrue(relative(helper, origin).getY() == 1, "plot should sit on the low ground, got " + relative(helper, origin));
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void ignoresGroundTooFarBelowTheBell(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 14; x <= 34; x++) {
+            for (int z = 14; z <= 34; z++) {
+                for (int y = 1; y <= PlotPlanner.MAX_VERTICAL + 1; y++) {
+                    helper.setBlock(x, y, z, Blocks.DIRT_PATH);
+                }
+            }
+        }
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(24, PlotPlanner.MAX_VERTICAL + 2, 24)), 4);
+        helper.assertTrue(PlotPlanner.find(helper.getLevel(), village, HOUSE).isEmpty(), "plot found more than " + PlotPlanner.MAX_VERTICAL + " blocks below the bell");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void neverPlansUnderAnOverhang(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // A stone shelf just above the vertical window over the whole reachable area, grass below it: a cave floor.
+        int shelfY = 1 + PlotPlanner.MAX_VERTICAL + 1;
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                helper.setBlock(x, shelfY, z, Blocks.STONE);
+            }
+        }
+        Optional<BlockPos> origin = PlotPlanner.find(helper.getLevel(), village(helper), HOUSE);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                helper.setBlock(x, shelfY, z, Blocks.AIR);
+            }
+        }
+        helper.assertTrue(origin.isEmpty(), "plot planned under the stone shelf at " + origin.map(pos -> relative(helper, pos)));
         helper.succeed();
     }
 
@@ -83,5 +138,56 @@ public final class PlotPlannerTests {
         }
         helper.assertTrue(PlotPlanner.find(helper.getLevel(), village(helper), HOUSE).isEmpty(), "plot found through logs");
         helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void aFailedSearchOfALargeVillageIsCheap(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if ((x + z) % 7 == 0) {
+                    helper.setBlock(x, 1, z, Blocks.OAK_LOG);
+                }
+            }
+        }
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(24, 1, 24)), 160);
+        long best = Long.MAX_VALUE;
+        boolean found = false;
+        for (int run = 0; run < 5; run++) {
+            long started = System.nanoTime();
+            // Every buildable spot is refused, so the whole reach is searched, as when nothing is buildable.
+            found |= PlotPlanner.find(helper.getLevel(), village, HOUSE, origin -> false).isPresent();
+            best = Math.min(best, System.nanoTime() - started);
+        }
+        helper.assertTrue(!found, "a refused spot was returned");
+        helper.assertTrue(best < 12_000_000L, "a failed search took " + best / 1000 + " us");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, timeoutTicks = 400)
+    public static void aVillageWithoutRoomWaitsBeforeSearchingAgain(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                helper.setBlock(x, 1, z, Blocks.OAK_LOG);
+            }
+        }
+        VillageData village = village(helper);
+        ServerLevel level = helper.getLevel();
+        StorehouseService.ensureStorehouse(level, village);
+        helper.assertTrue(village.storehousePos() == null, "storehouse placed on logs");
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                helper.setBlock(x, 1, z, Blocks.AIR);
+            }
+        }
+        long failedAt = level.getGameTime();
+        StorehouseService.ensureStorehouse(level, village);
+        helper.assertTrue(village.storehousePos() == null, "searched again right after a failed search");
+        helper.succeedWhen(() -> {
+            StorehouseService.ensureStorehouse(level, village);
+            helper.assertTrue(village.storehousePos() != null, "no storehouse after the wait");
+            helper.assertTrue(level.getGameTime() - failedAt >= StorehouseService.SEARCH_RETRY_TICKS, "searched again after only " + (level.getGameTime() - failedAt) + " ticks");
+        });
     }
 }

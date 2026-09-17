@@ -2,10 +2,9 @@ package dev.andreymudri.villagercity.village.plot;
 
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
-import java.util.ArrayList;
-import java.util.HashMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
@@ -14,14 +13,20 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap;
 
-/** Slice 1 plot rule: spiral out from the village center and take the first buildable spot. */
+/**
+ * Slice 1 plot rule: spiral out from the village center, at most {@link #MAX_REACH} blocks, and take the first buildable
+ * spot. A column's ground is its topmost solid block, accepted within {@link #MAX_VERTICAL} blocks above and below the
+ * bell, so a bell on a hill still finds the village's ground below it while caves and overhangs are never used.
+ */
 public final class PlotPlanner {
     public static final int SEARCH_MARGIN = 16;
     public static final int STEP = 2;
-    public static final int SCAN_UP = 8;
-    public static final int SCAN_DOWN = 8;
-    public static final int MAX_CANDIDATES = 1500;
+    /** How far above or below the bell a plot's ground may lie. */
+    public static final int MAX_VERTICAL = 16;
+    /** Farthest a spot's center may lie from the bell (Chebyshev), however large the village grows. */
+    public static final int MAX_REACH = 48;
 
     private PlotPlanner() {
     }
@@ -34,14 +39,10 @@ public final class PlotPlanner {
     /** As {@link #find(ServerLevel, VillageData, Vec3i)}, skipping buildable plots whose origin fails the predicate. */
     public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size, Predicate<BlockPos> originAllowed) {
         BlockPos center = village.center();
-        int reach = village.radius() + SEARCH_MARGIN;
+        int reach = Math.min(village.radius() + SEARCH_MARGIN, MAX_REACH);
         List<Footprint> occupied = village.occupiedFootprints();
-        Map<Long, Column> cache = new HashMap<>();
-        int checked = 0;
+        Long2ObjectMap<Column> cache = new Long2ObjectOpenHashMap<>();
         for (int[] offset : PlotRules.spiral(reach, STEP)) {
-            if (checked++ >= MAX_CANDIDATES) {
-                break;
-            }
             int minX = center.getX() + offset[0] - size.getX() / 2;
             int minZ = center.getZ() + offset[1] - size.getZ() / 2;
             Footprint footprint = new Footprint(minX, minZ, minX + size.getX() - 1, minZ + size.getZ() - 1);
@@ -50,16 +51,25 @@ public final class PlotPlanner {
                 continue;
             }
             Footprint area = footprint.inflate(PlotRules.MARGIN);
-            List<Column> columns = new ArrayList<>();
-            for (int x = area.minX(); x <= area.maxX(); x++) {
-                for (int z = area.minZ(); z <= area.maxZ(); z++) {
-                    final int cx = x;
-                    final int cz = z;
-                    columns.add(cache.computeIfAbsent(BlockPos.asLong(cx, 0, cz), k -> sample(level, cx, cz, center.getY())));
+            // The same rules as PlotRules.isBuildable, stopping at the first column that rules the spot out.
+            boolean buildable = true;
+            int low = Integer.MAX_VALUE;
+            int high = Integer.MIN_VALUE;
+            for (int x = area.minX(); x <= area.maxX() && buildable; x++) {
+                for (int z = area.minZ(); z <= area.maxZ() && buildable; z++) {
+                    long key = BlockPos.asLong(x, 0, z);
+                    Column column = cache.get(key);
+                    if (column == null) {
+                        column = sample(level, x, z, center.getY());
+                        cache.put(key, column);
+                    }
+                    low = Math.min(low, column.groundY());
+                    high = Math.max(high, column.groundY());
+                    buildable = column.present() && column.natural() && !column.fluid() && high - low <= PlotRules.MAX_HEIGHT_VARIANCE;
                 }
             }
-            if (PlotRules.isBuildable(columns)) {
-                BlockPos origin = new BlockPos(minX, PlotRules.buildY(columns), minZ);
+            if (buildable) {
+                BlockPos origin = new BlockPos(minX, high, minZ);
                 if (originAllowed.test(origin)) {
                     return Optional.of(origin);
                 }
@@ -68,21 +78,29 @@ public final class PlotPlanner {
         return Optional.empty();
     }
 
+    /**
+     * The column's ground: its topmost block that blocks motion, leaves and barriers aside (GameTest areas have a barrier
+     * ceiling). Missing when the column is unloaded or that ground lies more than {@link #MAX_VERTICAL} blocks from the
+     * bell, so nothing is ever built in a cave or under an overhang.
+     */
     static Column sample(ServerLevel level, int x, int z, int referenceY) {
-        int top = referenceY + SCAN_UP;
-        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos(x, top, z);
-        if (!level.isLoaded(pos)) {
+        if (!level.isLoaded(new BlockPos(x, referenceY, z))) {
             return Column.MISSING;
         }
-        for (int y = top; y >= referenceY - SCAN_DOWN; y--) {
+        int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos(x, 0, z);
+        for (int y = surface; y >= referenceY - MAX_VERTICAL; y--) {
             BlockState state = level.getBlockState(pos.setY(y));
+            if (y > referenceY + MAX_VERTICAL) {
+                if (state.blocksMotion() && !state.is(BlockTags.LEAVES) && !state.is(Blocks.BARRIER)) {
+                    return Column.MISSING;
+                }
+                continue;
+            }
             if (!state.getFluidState().isEmpty()) {
                 return new Column(y + 1, false, true);
             }
-            if (state.blocksMotion() && !state.is(BlockTags.LEAVES)) {
-                if (y == top) {
-                    return Column.MISSING;
-                }
+            if (state.blocksMotion() && !state.is(BlockTags.LEAVES) && !state.is(Blocks.BARRIER)) {
                 boolean natural = state.is(BlockTags.DIRT) || state.is(BlockTags.SAND)
                         || state.is(BlockTags.BASE_STONE_OVERWORLD) || state.is(Blocks.GRAVEL);
                 return new Column(y + 1, natural, false);
