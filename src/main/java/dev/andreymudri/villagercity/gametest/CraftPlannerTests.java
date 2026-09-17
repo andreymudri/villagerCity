@@ -28,6 +28,7 @@ public final class CraftPlannerTests {
         CraftPlanner.Result result = CraftPlanner.plan(recipes, registries, stock, orders, Map.of());
 
         helper.assertTrue(result.unmet().isEmpty(), "unmet " + result.unmet());
+        helper.assertTrue(result.missingBase().isEmpty(), "met order should not name a missing base, got " + result.missingBase());
         helper.assertTrue(result.steps().stream().anyMatch(s -> s.output() == Items.OAK_PLANKS), "no planks step in " + result.steps());
         helper.assertTrue(result.steps().stream().anyMatch(s -> s.output() == Items.OAK_DOOR), "no door step in " + result.steps());
         Map<Item, Long> finalStock = replay(helper, stock, result.steps());
@@ -45,6 +46,7 @@ public final class CraftPlannerTests {
         CraftPlanner.Result result = CraftPlanner.plan(recipes, registries, stock, orders, Map.of());
 
         helper.assertTrue(result.unmet().isEmpty(), "unmet " + result.unmet());
+        helper.assertTrue(result.missingBase().isEmpty(), "met order should not name a missing base, got " + result.missingBase());
         helper.assertTrue(
                 result.steps().stream().anyMatch(s -> s.kind() == CraftStep.Kind.SMELT && s.output() == Items.CHARCOAL),
                 "no charcoal smelt step in " + result.steps());
@@ -82,6 +84,7 @@ public final class CraftPlannerTests {
         CraftPlanner.Result result = CraftPlanner.plan(recipes, registries, stock, orders, Map.of());
 
         helper.assertTrue(result.unmet().isEmpty(), "unmet " + result.unmet());
+        helper.assertTrue(result.missingBase().isEmpty(), "met order should not name a missing base, got " + result.missingBase());
         helper.assertTrue(result.steps().stream().anyMatch(s -> s.kind() == CraftStep.Kind.SMELT && s.output() == Items.GLASS),
                 "no glass smelt step in " + result.steps());
         Map<Item, Long> finalStock = replay(helper, stock, result.steps());

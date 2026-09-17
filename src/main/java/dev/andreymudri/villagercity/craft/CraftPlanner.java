@@ -80,7 +80,10 @@ public final class CraftPlanner {
 
         /**
          * Ensures at least {@code need} of {@code item} are in the simulated stock, crafting or smelting the
-         * shortfall when a recipe can. Leaves the stock and steps exactly as they were on failure.
+         * shortfall when a recipe can. Leaves the stock and steps exactly as they were on failure. A failed
+         * candidate can still add base items (those with no recipe) to {@link #missingBase}; that is only undone,
+         * back to what it was before any candidate here was tried, once some candidate succeeds — a later success
+         * means nothing the earlier candidates were missing is actually blocking this item.
          */
         boolean ensureAvailable(Item item, long need, int depth) {
             long have = stock.getOrDefault(item, 0L);
@@ -96,10 +99,13 @@ public final class CraftPlanner {
                 missingBase.add(item);
                 return false;
             }
+            Set<Item> missingBaseAtEntry = new LinkedHashSet<>(missingBase);
             for (RecipeHolder<?> candidate : candidates) {
                 Map<Item, Long> stockSnapshot = new LinkedHashMap<>(stock);
                 int mark = steps.size();
                 if (tryRecipe(candidate, item, shortfall, depth)) {
+                    missingBase.clear();
+                    missingBase.addAll(missingBaseAtEntry);
                     return true;
                 }
                 stock.clear();
@@ -180,7 +186,8 @@ public final class CraftPlanner {
          * Picks the item in {@code ingredient.getItems()} with the highest simulated stock that can supply
          * {@code times} units (crafting the shortfall if needed), trying the next one, in the ingredient's own
          * order, when it cannot. Consumes {@code times} of the chosen item from stock. Returns {@code null}, with
-         * stock and steps unchanged, when no candidate item resolves.
+         * stock and steps unchanged, when no candidate item resolves; on success, undoes any {@link #missingBase}
+         * additions a rejected candidate item left behind, back to what it was before this slot was tried.
          */
         private Item resolveSlot(Ingredient ingredient, int times, int depth) {
             List<Item> options = new ArrayList<>();
@@ -191,11 +198,14 @@ public final class CraftPlanner {
                 }
             }
             options.sort(Comparator.comparingLong((Item candidate) -> stock.getOrDefault(candidate, 0L)).reversed());
+            Set<Item> missingBaseAtEntry = new LinkedHashSet<>(missingBase);
             for (Item candidate : options) {
                 Map<Item, Long> stockSnapshot = new LinkedHashMap<>(stock);
                 int mark = steps.size();
                 if (ensureAvailable(candidate, times, depth)) {
                     stock.merge(candidate, -(long) times, Long::sum);
+                    missingBase.clear();
+                    missingBase.addAll(missingBaseAtEntry);
                     return candidate;
                 }
                 stock.clear();
