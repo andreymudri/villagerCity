@@ -31,6 +31,11 @@ public final class Replant implements Task {
     }
 
     @Override
+    public String describe(TaskContext ctx) {
+        return "replanting at " + pos.toShortString();
+    }
+
+    @Override
     public Status tick(TaskContext ctx) {
         ServerLevel level = ctx.level();
         if (!(sapling instanceof BlockItem blockItem)

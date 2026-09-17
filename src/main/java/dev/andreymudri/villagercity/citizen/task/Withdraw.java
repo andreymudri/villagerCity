@@ -22,6 +22,11 @@ public final class Withdraw implements Task {
     }
 
     @Override
+    public String describe(TaskContext ctx) {
+        return "taking materials from the storehouse at " + storehouse.toShortString();
+    }
+
+    @Override
     public Status tick(TaskContext ctx) {
         if (ctx.villager().distanceToSqr(Vec3.atCenterOf(storehouse)) > Deposit.REACH * Deposit.REACH) {
             return Status.FAILED;

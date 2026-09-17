@@ -31,6 +31,11 @@ public final class PickUpItems implements Task {
     }
 
     @Override
+    public String describe(TaskContext ctx) {
+        return "picking up items around " + around.toShortString();
+    }
+
+    @Override
     public void start(TaskContext ctx) {
         ticksRun = 0;
         lastPathTick = -MoveTo.REPATH_TICKS;

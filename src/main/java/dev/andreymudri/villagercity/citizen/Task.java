@@ -15,4 +15,9 @@ public interface Task {
      */
     default void stop(TaskContext ctx) {
     }
+
+    /** What the task is doing, for /villagercity village. */
+    default String describe(TaskContext ctx) {
+        return getClass().getSimpleName();
+    }
 }

@@ -22,6 +22,11 @@ public final class Deposit implements Task {
     }
 
     @Override
+    public String describe(TaskContext ctx) {
+        return "storing items in the storehouse at " + storehouse.toShortString();
+    }
+
+    @Override
     public Status tick(TaskContext ctx) {
         if (ctx.villager().distanceToSqr(Vec3.atCenterOf(storehouse)) > REACH * REACH) {
             return Status.FAILED;

@@ -6,6 +6,7 @@ import java.util.List;
 public final class TaskSequence implements Task {
     private final List<Task> tasks;
     private int index;
+    private boolean failed;
 
     public TaskSequence(List<Task> tasks) {
         this.tasks = List.copyOf(tasks);
@@ -18,6 +19,7 @@ public final class TaskSequence implements Task {
     @Override
     public void start(TaskContext ctx) {
         index = 0;
+        failed = false;
         if (!tasks.isEmpty()) {
             tasks.get(0).start(ctx);
         }
@@ -25,6 +27,9 @@ public final class TaskSequence implements Task {
 
     @Override
     public Status tick(TaskContext ctx) {
+        if (failed) {
+            return Status.FAILED;
+        }
         if (index >= tasks.size()) {
             return Status.SUCCESS;
         }
@@ -35,7 +40,7 @@ public final class TaskSequence implements Task {
         }
         current.stop(ctx);
         if (status == Status.FAILED) {
-            index = tasks.size();
+            failed = true;
             return Status.FAILED;
         }
         index++;
@@ -48,11 +53,17 @@ public final class TaskSequence implements Task {
 
     @Override
     public void stop(TaskContext ctx) {
-        if (index < tasks.size()) {
+        if (!failed && index < tasks.size()) {
             tasks.get(index).stop(ctx);
         }
     }
 
+    @Override
+    public String describe(TaskContext ctx) {
+        return tasks.isEmpty() ? "nothing" : currentStep().describe(ctx);
+    }
+
+    /** The running step, the one that failed, or the last one once all succeeded. */
     public Task currentStep() {
         return tasks.get(Math.min(index, tasks.size() - 1));
     }

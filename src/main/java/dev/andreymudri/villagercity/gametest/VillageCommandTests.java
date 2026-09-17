@@ -1,12 +1,16 @@
 package dev.andreymudri.villagercity.gametest;
 
 import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.blueprint.Blueprint;
 import dev.andreymudri.villagercity.blueprint.Blueprints;
 import dev.andreymudri.villagercity.citizen.JobType;
+import dev.andreymudri.villagercity.citizen.TaskSequence;
+import dev.andreymudri.villagercity.citizen.task.MoveTo;
 import dev.andreymudri.villagercity.command.VillageCommand;
 import dev.andreymudri.villagercity.job.BuilderJob;
 import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.storehouse.StorehouseContent;
+import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
 import java.util.List;
 import java.util.UUID;
@@ -112,5 +116,27 @@ public final class VillageCommandTests {
         helper.assertTrue(text.contains("citizen " + far.getUUID() + " job=lumberjack task="), "citizen far from the bell not listed:\n" + text);
         helper.assertTrue(text.contains("citizen " + gone + " job=builder not loaded"), "unloaded roster citizen not listed:\n" + text);
         helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_step", timeoutTicks = 200)
+    public static void describeShowsTheCurrentStepAndThePlot(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        Villager builder = GameTestSupport.spawnVillager(helper, 4, 1, 4);
+        BlockPos origin = helper.absolutePos(new BlockPos(30, 1, 30));
+        village.addPlot(new Plot(UUID.randomUUID(), blueprint.id().toString(), origin, blueprint.size(), null, 0L, 1));
+        BlockPos target = helper.absolutePos(new BlockPos(40, 1, 40));
+        CitizenTestSupport.enroll(builder, village, JobType.BUILDER, ItemStack.EMPTY,
+                new ScriptedJob(TaskSequence.of(new MoveTo(target, 1.0))));
+        helper.runAtTickTime(5, () -> {
+            String text = String.join("\n", VillageCommand.describe(helper.getLevel(), village));
+            helper.assertTrue(text.contains("task=walking to " + target.toShortString() + " ("), "missing current step:\n" + text);
+            long left = blueprint.placements().stream().filter(p -> !BuilderJob.isDone(helper.getLevel(), village.plots().get(0), p)).count();
+            helper.assertTrue(left > 0 && text.contains("plot " + origin.toShortString() + " " + blueprint.id() + ": " + left + "/" + blueprint.placements().size()
+                    + " blocks left, released, abandoned 1/3"), "missing plot:\n" + text);
+            VillageTestSupport.remove(helper, village);
+            helper.succeed();
+        });
     }
 }
