@@ -48,14 +48,16 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Takes over a released plot once its retry time has passed, or else claims a new plot once the storehouse holds a
  * full blueprint's materials. A plot needing earthwork is only claimed while the village has a paver, and the builder
- * waits until the paver has prepared it. Then it withdraws what is missing, and clears and places blocks in build
- * order. Progress lives in the world and the plot record, so a reloaded or replacement builder resumes by skipping
+ * waits until the paver has prepared it, giving the plot up after {@link #PREPARATION_WAIT_TICKS}. Then it withdraws
+ * what is missing, and clears and places blocks in build order. Progress lives in the world and the plot record, so a reloaded or replacement builder resumes by skipping
  * blocks that are already right. A plot that keeps failing is released for a cooldown, and dropped after {@link #MAX_ABANDONS} abandons.
  */
 public final class BuilderJob implements Job {
     public static final int MAX_CONSECUTIVE_FAILURES = 5;
     public static final int MAX_ABANDONS = 3;
     public static final int RETRY_TICKS = 2400;
+    /** How long the builder waits for the paver to prepare its plot before giving the plot up. */
+    public static final int PREPARATION_WAIT_TICKS = 6000;
     public static final double WORK_REACH = 4.0;
     public static final int STAND_ASIDE_DISTANCE = 2;
     public static final double STAND_ASIDE_REACH = 0.9;
@@ -67,6 +69,9 @@ public final class BuilderJob implements Job {
     public static final int PATH_CHECKS_PER_SEARCH = 3;
 
     private int consecutiveFailures;
+    /** The plot whose preparation the builder is waiting for, and since when; a plot never prepared is given up. */
+    private @Nullable UUID unpreparedPlot;
+    private long waitingSince;
     /** Whether the last planned task works at the plot; only those failures count toward abandoning it. */
     private boolean atPlot;
     private @Nullable String waitingFor;
@@ -98,9 +103,20 @@ public final class BuilderJob implements Job {
         }
         Plot plot = mine.get();
         if (!plot.prepared()) {
-            waitingFor = "the paver to prepare the plot";
+            if (unpreparedPlot == null || !unpreparedPlot.equals(plot.id())) {
+                unpreparedPlot = plot.id();
+                waitingSince = level.getGameTime();
+            }
+            if (level.getGameTime() - waitingSince < PREPARATION_WAIT_TICKS) {
+                waitingFor = "the paver to prepare the plot";
+                return null;
+            }
+            // The paver cannot prepare this plot: give it up, so the village claims another one instead of stalling.
+            unpreparedPlot = null;
+            giveUp(level, village, plot);
             return null;
         }
+        unpreparedPlot = null;
         Optional<Blueprint> blueprint = Blueprints.load(level, ResourceLocation.parse(plot.blueprint()));
         if (blueprint.isEmpty()) {
             village.removePlot(plot.id());
@@ -118,14 +134,7 @@ public final class BuilderJob implements Job {
             return storehouse != null && Inventories.count(inventory, BuilderJob::isBuildingMaterial) > 0 ? deposit(storehouse) : null;
         }
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-            if (plot.abandons() + 1 >= MAX_ABANDONS) {
-                village.removePlot(plot.id());
-                village.markPlotFailed(plot.origin());
-            } else {
-                village.releasePlot(plot.id(), level.getGameTime() + RETRY_TICKS, true);
-            }
-            VillageRegistry.get(level).setDirty();
-            consecutiveFailures = 0;
+            giveUp(level, village, plot);
             return null;
         }
         Map<Item, Integer> missing = Inventories.missing(Blueprint.materialsFor(unfinished), inventory);
@@ -156,6 +165,18 @@ public final class BuilderJob implements Job {
         return TaskSequence.of(
                 MoveTo.digOut(pos, WORK_REACH),
                 new PlaceBlock(pos, next.state(), Blueprint.costOf(next.state())));
+    }
+
+    /** Releases the plot for {@link #RETRY_TICKS}, or drops it and marks the spot failed once it has been abandoned {@link #MAX_ABANDONS} times. */
+    private void giveUp(ServerLevel level, VillageData village, Plot plot) {
+        if (plot.abandons() + 1 >= MAX_ABANDONS) {
+            village.removePlot(plot.id());
+            village.markPlotFailed(plot.origin());
+        } else {
+            village.releasePlot(plot.id(), level.getGameTime() + RETRY_TICKS, true);
+        }
+        VillageRegistry.get(level).setDirty();
+        consecutiveFailures = 0;
     }
 
     /**
