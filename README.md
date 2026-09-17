@@ -39,6 +39,10 @@ command it RTS-style.
   can walk to. A plot whose builder gives up is retried after two minutes and dropped after the third try, and a
   dropped spot is never picked again; a plot whose builder dies or leaves is taken over at once. A resumed plot
   needs only the materials for the missing blocks.
+- **Trapped citizens dig out:** a worker stuck in a cave that cannot path to the storehouse or its plot digs a
+  staircase through natural ground (stone, dirt, sand, gravel, ores) toward it. It never digs build blocks, blocks
+  next to water or lava, or anything `doMobGriefing` or a protection mod forbids. A builder only abandons a plot
+  for failures at the plot itself, not for failing to reach the storehouse.
 - **Save-safe:** in-flight work is not saved; jobs re-plan from the world after a reload.
 
 Villagers still trade, sleep, panic, and react to raids as usual: the mod pauses its own work whenever vanilla
@@ -94,7 +98,9 @@ The first `runClient` or `build` downloads and decompiles Minecraft and takes se
 3. Make sure it has two **adult villagers without a profession** (not nitwits). Break a couple of
    workstations or use spawn eggs if every villager is employed.
 4. Run `/villagercity village` (op only) to see the nearest village's id, age, house count, storehouse
-   contents, and each citizen's job and current task. An idle citizen says what it waits for, for example
+   contents, every plot's progress, and each citizen's job, position and current step, for example
+   `task=walking to 864, 88, -1070 (15 blocks, stuck)` or `task=placing oak_planks at 842, 73, -1028`.
+   An idle citizen says what it waits for, for example
    `task=idle (waiting for materials: oak_planks x57)` or `task=idle (waiting for a buildable plot near the
    bell)`; `task=sleeping`, `task=trading` or `task=rest` mean vanilla has the villager for now.
 5. Villagers cannot craft yet, so stock the storehouse with the starter house materials: exactly 25 cobblestone,
