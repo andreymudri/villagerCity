@@ -30,15 +30,16 @@ public final class VillageData {
     private final List<Plot> plots;
     private final ContributionLedger ledger;
     private final Map<UUID, JobType> citizens;
+    private final Map<UUID, Long> storehouseDebt;
     private boolean managed;
 
     public VillageData(UUID id, BlockPos center, int radius) {
-        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), true);
+        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), Map.of(), true);
     }
 
     public VillageData(UUID id, BlockPos center, int radius, VillageAge age, @Nullable BlockPos storehousePos,
                        List<BuildingRecord> houses, List<Plot> plots, ContributionLedger ledger, Map<UUID, JobType> citizens,
-                       boolean managed) {
+                       Map<UUID, Long> storehouseDebt, boolean managed) {
         this.id = id;
         this.center = center.immutable();
         this.radius = radius;
@@ -48,6 +49,7 @@ public final class VillageData {
         this.plots = new ArrayList<>(plots);
         this.ledger = ledger;
         this.citizens = new LinkedHashMap<>(citizens);
+        this.storehouseDebt = new LinkedHashMap<>(storehouseDebt);
         this.managed = managed;
     }
 
@@ -102,6 +104,23 @@ public final class VillageData {
 
     public int jobCount(JobType job) {
         return (int) citizens.values().stream().filter(job::equals).count();
+    }
+
+    /** Items each player has taken out of the storehouse and not yet put back; deposits repay this before earning credit. */
+    public Map<UUID, Long> storehouseDebt() {
+        return Collections.unmodifiableMap(storehouseDebt);
+    }
+
+    public long debt(UUID player) {
+        return storehouseDebt.getOrDefault(player, 0L);
+    }
+
+    public void setDebt(UUID player, long debt) {
+        if (debt <= 0) {
+            storehouseDebt.remove(player);
+        } else {
+            storehouseDebt.put(player, debt);
+        }
     }
 
     /** When false, the village ticker leaves this village alone (used by focused GameTests). */
