@@ -77,7 +77,7 @@ public final class LumberjackJob implements Job {
         target = found.base();
         return TaskSequence.of(
                 new MoveTo(found.base(), 2.5),
-                new ChopTree(found.logs()),
+                new ChopTree(found.base(), found.logs()),
                 new PickUpItems(found.base(), DROP_RADIUS, LumberjackJob::isHaul),
                 new MoveTo(found.base(), 2.5),
                 new Replant(found.base(), SAPLINGS.getOrDefault(found.logBlock(), Items.AIR)));

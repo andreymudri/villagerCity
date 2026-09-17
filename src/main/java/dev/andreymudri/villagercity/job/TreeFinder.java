@@ -81,6 +81,9 @@ public final class TreeFinder {
      *       (Chebyshev), so a trunk is one column or a 2x2 while a log wall on the ground is not;</li>
      *   <li>higher logs (branches) reach at most {@link #MAX_SPREAD} blocks sideways; vanilla cherry and mega jungle
      *       branches reach 5;</li>
+     *   <li>every log standing on a log of its kind stands on one of the tree's own logs, so a raised beam or ring
+     *       that rests on other posts (a player's frame) is not part of a tree, and the walk must not run past
+     *       {@link #MAX_TRUNK} logs;</li>
      *   <li>at least {@link #MIN_LEAVES} distinct natural (non-persistent) leaves touch the logs;</li>
      *   <li>the base has a log of its kind directly above it.</li>
      * </ul>
@@ -121,8 +124,14 @@ public final class TreeFinder {
                 }
             }
         }
-        if (leaves.size() < MIN_LEAVES) {
+        if (!queue.isEmpty() || leaves.size() < MIN_LEAVES) {
             return Optional.empty();
+        }
+        Set<BlockPos> tree = new HashSet<>(logs);
+        for (BlockPos pos : logs) {
+            if (!pos.equals(base) && level.getBlockState(pos.below()).is(log) && !tree.contains(pos.below())) {
+                return Optional.empty();
+            }
         }
         logs.sort(Comparator.comparingInt(BlockPos::getY));
         return Optional.of(new Tree(base.immutable(), List.copyOf(logs), log));

@@ -91,6 +91,85 @@ public final class TreeTargetingTests {
         helper.succeed();
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_frame")
+    public static void rejectsRaisedLogFramesNextToTree(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        LumberjackTests.plantTree(helper, new BlockPos(26, 1, 26));
+        logFrame(helper, 28, 26, 7);
+        LumberjackTests.plantTree(helper, new BlockPos(8, 1, 10));
+        logFrame(helper, 10, 10, 5);
+        Optional<TreeFinder.Tree> wide = TreeFinder.trunk(helper.getLevel(), helper.absolutePos(new BlockPos(28, 1, 26)));
+        helper.assertTrue(wide.isEmpty(), "7x7 log frame accepted as a tree with " + wide.map(t -> t.logs().size()).orElse(0) + " logs");
+        Optional<TreeFinder.Tree> narrow = TreeFinder.trunk(helper.getLevel(), helper.absolutePos(new BlockPos(10, 1, 10)));
+        helper.assertTrue(narrow.isEmpty(), "5x5 log frame accepted as a tree with " + narrow.map(t -> t.logs().size()).orElse(0) + " logs");
+        helper.succeed();
+    }
+
+    /** Four 3-high oak log corner posts, width blocks apart edge to edge, joined by a ring of logs on top. */
+    private static void logFrame(GameTestHelper helper, int minX, int minZ, int width) {
+        int maxX = minX + width - 1;
+        int maxZ = minZ + width - 1;
+        for (int x : new int[] {minX, maxX}) {
+            for (int z : new int[] {minZ, maxZ}) {
+                for (int y = 1; y <= 3; y++) {
+                    helper.setBlock(new BlockPos(x, y, z), Blocks.OAK_LOG);
+                }
+            }
+        }
+        for (int i = 0; i < width; i++) {
+            helper.setBlock(new BlockPos(minX + i, 4, minZ), Blocks.OAK_LOG);
+            helper.setBlock(new BlockPos(minX + i, 4, maxZ), Blocks.OAK_LOG);
+            helper.setBlock(new BlockPos(minX, 4, minZ + i), Blocks.OAK_LOG);
+            helper.setBlock(new BlockPos(maxX, 4, minZ + i), Blocks.OAK_LOG);
+        }
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_far", timeoutTicks = 3000)
+    public static void neverChopsFromAfarAfterBeingMoved(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos base = new BlockPos(26, 1, 26);
+        for (int y = 0; y < 12; y++) {
+            helper.setBlock(base.above(y), Blocks.OAK_LOG);
+        }
+        for (int y = 9; y <= 12; y++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    if (dx != 0 || dz != 0 || y == 12) {
+                        helper.setBlock(base.offset(dx, y, dz), Blocks.OAK_LEAVES);
+                    }
+                }
+            }
+        }
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 6, false);
+        BlockPos store = new BlockPos(6, 1, 40);
+        helper.setBlock(store, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(store));
+        Villager villager = GameTestSupport.spawnVillager(helper, 26, 1, 20);
+        CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, new ItemStack(Items.STONE_AXE), new LumberjackJob());
+        int[] state = {12, 0, 0};
+        helper.succeedWhen(() -> {
+            int logs = 0;
+            for (int y = 0; y < 12; y++) {
+                if (helper.getBlockState(base.above(y)).is(Blocks.OAK_LOG)) {
+                    logs++;
+                }
+            }
+            if (logs < state[0]) {
+                BlockPos at = villager.blockPosition().subtract(helper.absolutePos(BlockPos.ZERO));
+                state[2] = Math.max(state[2], Math.max(Math.abs(at.getX() - base.getX()), Math.abs(at.getZ() - base.getZ())));
+                if (state[1] == 0) {
+                    state[1] = 1;
+                    BlockPos far = helper.absolutePos(new BlockPos(4, 1, 4));
+                    villager.teleportTo(far.getX() + 0.5, far.getY(), far.getZ() + 0.5);
+                }
+                state[0] = logs;
+            }
+            helper.assertTrue(state[2] <= 5, "a log was broken while the lumberjack stood " + state[2] + " blocks from the tree");
+            helper.assertTrue(logs == 0, "logs left " + logs);
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_ok")
     public static void acceptsPlantedTree(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
