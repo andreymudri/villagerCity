@@ -7,6 +7,7 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.core.NonNullList;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.Container;
 import net.minecraft.world.ContainerHelper;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.AbstractContainerMenu;
@@ -42,6 +43,14 @@ public class StorehouseBlockEntity extends BaseContainerBlockEntity {
     @Override
     public int getContainerSize() {
         return SIZE;
+    }
+
+    /**
+     * Hoppers may insert but never extract: extraction outside a menu click would bypass storehouse debt.
+     */
+    @Override
+    public boolean canTakeItem(Container target, int slot, ItemStack stack) {
+        return false;
     }
 
     @Override

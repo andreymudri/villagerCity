@@ -16,12 +16,22 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.boss.wither.WitherBoss;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.ClickType;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.HopperBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import net.neoforged.neoforge.common.CommonHooks;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -192,6 +202,103 @@ public final class StorehouseTests {
         boolean otherStayed = ItemStack.isSameItemSameComponents(storehouse.getItem(0), other)
                 || ItemStack.isSameItemSameComponents(storehouse.getItem(1), other);
         helper.assertTrue(otherStayed && storehouse.count(Items.OAK_LOG) == 1, "the other log did not stay in the storehouse");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_storehouse_hopper_out")
+    public static void hoppersCannotPullFromStorehouse(GameTestHelper helper) {
+        BlockPos store = new BlockPos(10, 2, 10);
+        BlockPos hopperPos = new BlockPos(10, 1, 10);
+        helper.setBlock(store, StorehouseContent.BLOCK.get());
+        helper.setBlock(hopperPos, Blocks.HOPPER);
+        StorehouseBlockEntity storehouse = helper.getBlockEntity(store);
+        storehouse.insertFromCitizen(new ItemStack(Items.OAK_LOG, 5));
+
+        helper.runAfterDelay(60, () -> {
+            HopperBlockEntity hopper = helper.getBlockEntity(hopperPos);
+            helper.assertTrue(storehouse.count(Items.OAK_LOG) == 5, "storehouse left with " + storehouse.count(Items.OAK_LOG) + " logs");
+            helper.assertTrue(hopper.isEmpty(), "hopper pulled items out of the storehouse");
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_storehouse_hopper_in")
+    public static void hoppersCanStillInsertWithoutCredit(GameTestHelper helper) {
+        BlockPos store = new BlockPos(10, 1, 10);
+        BlockPos hopperPos = new BlockPos(10, 2, 10);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 12, false);
+        helper.setBlock(store, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(store));
+        StorehouseBlockEntity storehouse = helper.getBlockEntity(store);
+        helper.setBlock(hopperPos, Blocks.HOPPER);
+        HopperBlockEntity hopper = helper.getBlockEntity(hopperPos);
+        hopper.setItem(0, new ItemStack(Items.COBBLESTONE, 3));
+
+        helper.succeedWhen(() -> {
+            helper.assertTrue(storehouse.count(Items.COBBLESTONE) == 3, "storehouse holds " + storehouse.count(Items.COBBLESTONE) + " cobblestone");
+            boolean credited = village.ledger().snapshot().values().stream()
+                    .anyMatch(byCategory -> byCategory.getOrDefault(ContributionCategory.DEPOSIT, 0L) > 0);
+            VillageTestSupport.remove(helper, village);
+            helper.assertFalse(credited, "a hopper insert was credited");
+        });
+    }
+
+    @SuppressWarnings("removal")
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_storehouse_break")
+    public static void breakingChargesTheBreakerDebt(GameTestHelper helper) {
+        BlockPos store = new BlockPos(10, 1, 10);
+        BlockPos abs = helper.absolutePos(store);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 12, false);
+        helper.setBlock(store, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(abs);
+        StorehouseBlockEntity broken = helper.getBlockEntity(store);
+        broken.insertFromCitizen(new ItemStack(Items.OAK_LOG, 12));
+        ServerPlayer player = helper.makeMockServerPlayerInLevel();
+        player.setGameMode(GameType.SURVIVAL);
+
+        boolean destroyed = player.gameMode.destroyBlock(abs);
+        long debtAfterBreak = village.debt(player.getUUID());
+
+        helper.setBlock(store, StorehouseContent.BLOCK.get());
+        StorehouseBlockEntity storehouse = helper.getBlockEntity(store);
+        player.getInventory().setItem(0, new ItemStack(Items.OAK_LOG, 12));
+        StorehouseMenu menu = new StorehouseMenu(1, player.getInventory(), storehouse);
+        menu.clicked(HOTBAR_0, 0, ClickType.QUICK_MOVE, player);
+
+        long credited = village.ledger().total(player.getUUID(), ContributionCategory.DEPOSIT);
+        long debt = village.debt(player.getUUID());
+        helper.getLevel().getEntitiesOfClass(ItemEntity.class, helper.getBounds().inflate(4.0)).forEach(Entity::discard);
+        helper.getLevel().getServer().getPlayerList().remove(player);
+        VillageTestSupport.remove(helper, village);
+        helper.assertTrue(destroyed, "the player could not break the storehouse");
+        helper.assertTrue(debtAfterBreak == 12, "breaking a storehouse holding 12 logs left debt " + debtAfterBreak);
+        helper.assertTrue(storehouse.count(Items.OAK_LOG) == 12, "redeposit left " + storehouse.count(Items.OAK_LOG));
+        helper.assertTrue(credited == 0, "credited " + credited + " for returning the dropped logs");
+        helper.assertTrue(debt == 0, "debt left " + debt);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_storehouse_explosion")
+    public static void explosionsDoNotOpenStorehouse(GameTestHelper helper) {
+        BlockPos store = new BlockPos(10, 1, 10);
+        helper.setBlock(store, StorehouseContent.BLOCK.get());
+        BlockPos abs = helper.absolutePos(store);
+
+        helper.getLevel().explode(null, abs.getX() + 2.5, abs.getY() + 0.5, abs.getZ() + 0.5, 4.0f, Level.ExplosionInteraction.TNT);
+
+        helper.assertBlockPresent(StorehouseContent.BLOCK.get(), store);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void bossesCannotBreakStorehouse(GameTestHelper helper) {
+        place(helper);
+        BlockState state = StorehouseContent.BLOCK.get().defaultBlockState();
+        WitherBoss wither = EntityType.WITHER.create(helper.getLevel());
+
+        helper.assertTrue(state.is(BlockTags.WITHER_IMMUNE), "storehouse is not wither immune");
+        helper.assertTrue(state.is(BlockTags.DRAGON_IMMUNE), "storehouse is not dragon immune");
+        helper.assertFalse(CommonHooks.canEntityDestroy(helper.getLevel(), helper.absolutePos(STORE), wither), "a wither may destroy the storehouse");
         helper.succeed();
     }
 
