@@ -2,6 +2,8 @@ package dev.andreymudri.villagercity.citizen.task;
 
 import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
+import java.util.Set;
+import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.entity.npc.Villager;
@@ -63,7 +65,7 @@ public final class MoveTo implements Task {
         }
         boolean ours = target.equals(navigation.getTargetPos());
         if ((navigation.isDone() || !ours) && now - lastPathTick >= (ours ? REPATH_TICKS : 0)) {
-            Path path = navigation.createPath(target, pathAccuracy(reach));
+            Path path = createPath(villager, navigation);
             if (path != null) {
                 navigation.moveTo(path, SPEED);
             }
@@ -71,6 +73,19 @@ public final class MoveTo implements Task {
         }
         villager.getLookControl().setLookAt(center);
         return Status.RUNNING;
+    }
+
+    /**
+     * Ground navigation's {@code createPath(BlockPos, int)} moves a solid target up to the first free block above it,
+     * so a path to a tree base leads to the top of the trunk and a path to the storehouse onto its roof. For a solid
+     * target the set overload is used instead, which paths to a cell within reach of the block itself.
+     */
+    private @Nullable Path createPath(Villager villager, PathNavigation navigation) {
+        int accuracy = pathAccuracy(reach);
+        if (villager.level().getBlockState(target).isSolid()) {
+            return navigation.createPath(Set.of(target), accuracy);
+        }
+        return navigation.createPath(target, accuracy);
     }
 
     public BlockPos target() {

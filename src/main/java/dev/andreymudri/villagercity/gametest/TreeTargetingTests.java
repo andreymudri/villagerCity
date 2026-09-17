@@ -170,6 +170,35 @@ public final class TreeTargetingTests {
         });
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_tall_behind_store", timeoutTicks = 3000)
+    public static void fellsTallTreeWithStorehouseInTheWay(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos base = new BlockPos(26, 1, 26);
+        for (int y = 0; y < 12; y++) {
+            helper.setBlock(base.above(y), Blocks.OAK_LOG);
+        }
+        for (int y = 9; y <= 12; y++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    if (dx != 0 || dz != 0 || y == 12) {
+                        helper.setBlock(base.offset(dx, y, dz), Blocks.OAK_LEAVES);
+                    }
+                }
+            }
+        }
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 6, false);
+        helper.setBlock(STORE, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(STORE));
+        Villager villager = GameTestSupport.spawnVillager(helper, 22, 1, 22);
+        CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, new ItemStack(Items.STONE_AXE), new LumberjackJob());
+        helper.succeedWhen(() -> {
+            for (int y = 0; y < 12; y++) {
+                helper.assertBlockNotPresent(Blocks.OAK_LOG, base.above(y));
+            }
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_ok")
     public static void acceptsPlantedTree(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
