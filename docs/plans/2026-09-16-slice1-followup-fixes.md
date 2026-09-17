@@ -287,6 +287,7 @@ named mutation in a scratch copy (never committed), running the test RED, then r
 **Files:**
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/TreeFinder.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/LumberjackJob.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/job/Replant.java`
 - Create: `src/main/java/dev/andreymudri/villagercity/gametest/TreeTargetingTests.java`
 
 **Depends:** T1
@@ -295,7 +296,7 @@ named mutation in a scratch copy (never committed), running the test RED, then r
 
 Findings: `TreeFinder.trunk` accepts any same-kind log structure touching one natural leaf (a player's 18-log
 wall beside a canopy was chopped down), and `LumberjackJob` always re-targets the nearest tree, so one
-unreachable tree (on a 3-block pillar) blocks the lumberjack forever.
+unreachable tree (on a 3-block pillar) blocks the lumberjack forever. `Replant` places the sapling with a bare `setBlock`, bypassing doMobGriefing and `EntityPlaceEvent` (fixes1 phase 1 security review, reproduced).
 
 - [ ] **Step 1:** `TreeTargetingTests.java` (RED first; use `LumberjackTests.plantTree`, which is package-private in the same package):
   - `rejectsLogWallTouchingCanopy` (batch `vc_tree_wall`): OAK_LOG wall x=26..31, y=1..3, z=26 on grass, plus a default-state OAK_LEAVES cluster of 4 at (32,3,26),(32,4,26),(32,3,27),(32,3,25); assert `TreeFinder.trunk(level, abs(26,1,26))` is empty.
@@ -303,10 +304,14 @@ unreachable tree (on a 3-block pillar) blocks the lumberjack forever.
   - `acceptsPlantedTree` (batch `vc_tree_ok`): `plantTree` at (26,1,26); assert present with 5 logs.
   - `skipsUnreachableTree` (batch `vc_tree_unreachable`, timeoutTicks 2000): the reviewer's setup — dirt pillar (26,1..3,26) with `plantTree` at (26,4,26), a reachable `plantTree` at (22,1,34), village bell (40,1,40) radius 6 with storehouse at (22,1,24), lumberjack at (22,1,22) with a stone axe and `new LumberjackJob()`; `succeedWhen` the log at (22,1,34) is gone.
   - `skipsProtectedTree` (batch `vc_tree_protected`, timeoutTicks 2000): two planted trees; a static `LivingDestroyBlockEvent` listener (same `PROTECTED` set pattern as Task 1's tests) protects every log of the nearer tree; `succeedWhen` the farther tree's base log is gone and the protected tree's logs are all present; clear the set before succeeding.
+  - `replantRespectsGriefing` (batch `vc_tree_replant`): with `doMobGriefing` false, run a `Replant` for a villager holding an oak sapling next to an air cell on dirt; assert the cell stays air and the sapling stays in the inventory; restore the gamerule before succeeding.
+  - `replantRespectsPlaceEvent` (batch `vc_tree_replant_event`): a static `EntityPlaceEvent` listener cancels placements at a protected position (same `PROTECTED` set pattern as Task 1's tests); assert the cell stays air after `Replant` ticks and the sapling is back in the inventory; clear the set before succeeding.
 
 - [ ] **Step 2:** `TreeFinder`: add `MAX_SPREAD = 5` and `MIN_LEAVES = 4`. In `trunk`, count distinct natural leaf positions (a `Set<BlockPos>`) instead of a boolean; if any connected same-kind log lies more than `MAX_SPREAD` blocks horizontally (Chebyshev) from the base, return empty; return empty when fewer than `MIN_LEAVES` natural leaves touch the logs or when the base has no log of its kind directly above it. Update the Javadoc to state the three rules. Add `findNearest(ServerLevel, BlockPos, VillageData, Predicate<BlockPos> skipBase)`; the existing overload delegates with `base -> false`.
 
 - [ ] **Step 3:** `LumberjackJob`: add `AVOID_TICKS = 2400`, a `Map<BlockPos, Long> avoidUntil` and a `@Nullable BlockPos target`. In `plan`, drop expired entries, pass `base -> avoidUntil.containsKey(base)` to `findNearest`, and set `target = found.base()` when returning the tree sequence (null for a deposit). Override `onTaskFinished`: when `target != null`, avoid it until `gameTime + AVOID_TICKS` if the status is FAILED or `TreeFinder.trunk(level, target)` is still present (logs left standing, e.g. protected); then clear `target`. The avoid list is in-memory only, which matches `Job`'s contract that jobs keep no state that must survive a save.
+
+- [ ] **Step 3b:** `Replant`: return SUCCESS without placing when `WorldPermissions.mayGrief(level, villager)` is false. Otherwise take `WorldPermissions.snapshot(level, pos)` before `setBlock`; after placing, when `WorldPermissions.placementCancelled(villager, snapshot)` is true, `snapshot.restore(Block.UPDATE_CLIENTS)` and return the sapling to the villager's inventory. The sapling is consumed only by a placement that stands. Update the class Javadoc.
 
 - [ ] **Step 4:** Build and `scripts/gametest.sh` — both pass, including `LumberjackTests` and `EndToEndTests`.
 
