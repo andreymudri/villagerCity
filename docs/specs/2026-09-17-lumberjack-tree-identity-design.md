@@ -29,7 +29,8 @@ entity placed. The set is saved as a long array.
   moving pistons.
 - **Pistons:** on `PistonEvent.Pre` (at `LOWEST`), the logs remembered within 14 blocks of the piston are noted,
   read from an index of entries by chunk. On `Post`, each noted log whose position no longer holds a log, and whose
-  next position along the motion holds a moving block carrying a log, moves its entry there.
+  next position along the motion holds a moving block (not the piston head) carrying a log along that same motion,
+  moves its entry there. Both checks matter when two pistons fire in the same tick.
 - **Crash safety:** chunks are written when they unload, but saved data only with the level. When a chunk holding
   remembered logs unloads while the data is dirty, the data is written too.
 - **Not covered:** logs placed before the mod was installed, and commands (`/setblock`, `/fill`).
@@ -38,7 +39,10 @@ entity placed. The set is saved as a long array.
 
 `TreeFinder.shape` rejects the whole tree when any of its logs touches (in its 3x3x3) a remembered log of any kind:
 a stripped trunk log, a spruce beam, oak wood. It also rejects a tree when a log other than the base rests on a
-block no tree grows over (planks, cobblestone, bricks), which catches untracked log walls on a foundation. It also rejects the tree when any
+block no tree grows over (planks, cobblestone, bricks), which catches untracked log walls on a foundation. Natural
+supports are anything that does not block motion, logs, leaves, `#overworld_carver_replaceables` (stone, dirt, sand,
+sandstone, terracotta, ores, snow), ice, and what generates beside trees: pumpkins, melons, huge mushrooms, bamboo,
+mossy cobblestone boulders, cocoa, bee nests, azaleas, dripstone, moss, amethyst and obsidian. It also rejects the tree when any
 of its logs lies inside a generated structure piece. `insideStructure` reads the chunk's structure references and
 the starts they point to without loading chunks. A start that is not in memory counts as covering the position,
 which only postpones felling there. The result: village houses, and decor trees inside village pieces, are never
@@ -127,6 +131,10 @@ belongs to a tree already walked in the same search, so avoided trees cost no wa
   - the sweep runs on its own, and neither loads nor forgets logs in unloaded chunks;
   - adding and removing marks the data dirty, and a chunk unload writes it;
   - a crimson fungus grown with bone meal is not placed.
+- **Review round 4:**
+  - dark oaks, acacias and fancy oaks whose branches rest on pumpkins, melons, huge mushrooms, bamboo, mossy
+    cobblestone, sandstone or calcite are still trees;
+  - a piston firing in the same tick as another never moves the entry of a log it did not push.
 - **Known, not fixed:**
   - rows of 1x1 trees with no gap merge into one ground layer wider than 2x2 and are never felled;
   - felling one tree of a dense grove can take branch logs, and a shifted trunk segment, from a neighbour;

@@ -239,6 +239,33 @@ public final class PlacedLogsTests {
                 .thenSucceed();
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_placed_two_pistons", timeoutTicks = 100)
+    public static void aPistonFiringInTheSameTickMovesNoOtherEntry(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        PlacedLogs logs = PlacedLogs.get(level);
+        helper.setBlock(new BlockPos(10, 1, 10), Blocks.PISTON.defaultBlockState().setValue(PistonBaseBlock.FACING, Direction.EAST));
+        BlockPos pushed = log(helper, 11, 10);
+        // Right beside where the pushed log lands, never moved.
+        BlockPos still = log(helper, 12, 11);
+        helper.setBlock(new BlockPos(20, 1, 20), Blocks.PISTON.defaultBlockState().setValue(PistonBaseBlock.FACING, Direction.NORTH));
+        helper.setBlock(new BlockPos(20, 1, 19), Blocks.STONE);
+        helper.startSequence()
+                .thenExecute(() -> {
+                    helper.setBlock(new BlockPos(9, 1, 10), Blocks.REDSTONE_BLOCK);
+                    helper.setBlock(new BlockPos(20, 1, 21), Blocks.REDSTONE_BLOCK);
+                })
+                .thenExecuteAfter(6, () -> {
+                    boolean stillTracked = logs.contains(still) && level.getBlockState(still).is(Blocks.OAK_LOG);
+                    boolean pushedTracked = logs.contains(pushed.east()) && !logs.contains(pushed);
+                    List.of(pushed, pushed.east(), still, still.north()).forEach(logs::remove);
+                    helper.assertTrue(helper.getBlockState(new BlockPos(20, 1, 18)).is(Blocks.STONE), "second piston did not fire");
+                    helper.assertTrue(pushedTracked, "pushed log's entry did not follow it");
+                    helper.assertTrue(stillTracked, "a log no piston moved lost its entry");
+                })
+                .thenSucceed();
+    }
+
     /** Problems when the logs that started at {@code starts} are not remembered exactly at {@code expected}. */
     private static List<String> entries(GameTestHelper helper, PlacedLogs logs, List<BlockPos> starts, List<BlockPos> expected) {
         List<String> wrong = new ArrayList<>();

@@ -147,8 +147,8 @@ public final class PlacedLogs extends SavedData {
     }
 
     /**
-     * Moves the entry of every noted log the piston actually carried one block along its motion: the next
-     * position holds a moving block carrying a log, which can only have come from it.
+     * Moves the entry of every noted log the piston actually carried one block along its motion: its position
+     * no longer holds a log, and the next one holds a moving block carrying a log along that motion.
      */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onPistonPost(PistonEvent.Post event) {
@@ -164,7 +164,12 @@ public final class PlacedLogs extends SavedData {
         List<BlockPos> moved = new ArrayList<>();
         for (BlockPos from : push.from()) {
             BlockPos to = from.relative(push.motion());
-            if (level.getBlockEntity(to) instanceof PistonMovingBlockEntity moving
+            // Another piston firing in the same tick may have moved some other log next to this one: only a log that left
+            // its position, carried along this piston's motion, is this one.
+            if (!level.getBlockState(from).is(BlockTags.LOGS)
+                    && level.getBlockEntity(to) instanceof PistonMovingBlockEntity moving
+                    && !moving.isSourcePiston()
+                    && moving.getMovementDirection() == push.motion()
                     && moving.getMovedState().is(BlockTags.LOGS)) {
                 logs.remove(from);
                 moved.add(to);

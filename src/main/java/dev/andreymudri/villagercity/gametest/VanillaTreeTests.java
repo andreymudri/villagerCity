@@ -64,6 +64,47 @@ public final class VanillaTreeTests {
         helper.succeed();
     }
 
+    /** Pumpkins, melons, huge mushrooms and bamboo generate beside trees; a branch resting on one is still a tree. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_vanilla_trees_over_plants", timeoutTicks = 1200)
+    public static void branchesOverPumpkinsAndMushroomsAreStillTrees(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos origin = helper.absolutePos(ORIGIN);
+        List<Block> supports = List.of(Blocks.PUMPKIN, Blocks.MELON, Blocks.MUSHROOM_STEM, Blocks.RED_MUSHROOM_BLOCK,
+                Blocks.BROWN_MUSHROOM_BLOCK, Blocks.BAMBOO, Blocks.MOSSY_COBBLESTONE, Blocks.SANDSTONE, Blocks.CALCITE);
+        StringBuilder rejected = new StringBuilder();
+        int propped = 0;
+        for (ResourceKey<ConfiguredFeature<?, ?>> species : List.of(TreeFeatures.DARK_OAK, TreeFeatures.ACACIA, TreeFeatures.FANCY_OAK)) {
+            for (int seed = 0; seed < SEEDS; seed++) {
+                clear(level, origin);
+                if (!grow(level, species, seed, origin)) {
+                    continue;
+                }
+                Optional<TreeFinder.Tree> tree = accepted(level, origin);
+                if (tree.isEmpty()) {
+                    continue;
+                }
+                Block support = supports.get(seed % supports.size());
+                boolean any = false;
+                for (BlockPos log : tree.get().logs()) {
+                    if (log.getY() > tree.get().base().getY() && level.getBlockState(log.below()).isAir()) {
+                        level.setBlock(log.below(), support.defaultBlockState(), Block.UPDATE_CLIENTS);
+                        any = true;
+                    }
+                }
+                if (any) {
+                    propped++;
+                    if (accepted(level, origin).isEmpty()) {
+                        rejected.append(' ').append(species.location().getPath()).append('#').append(seed).append(" over ").append(support.getDescriptionId());
+                    }
+                }
+            }
+        }
+        clear(level, origin);
+        helper.assertTrue(propped >= 20, "only " + propped + " trees had a branch to rest on something");
+        helper.assertTrue(rejected.isEmpty(), "trees rejected:" + rejected);
+        helper.succeed();
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_vanilla_fell_jungle", timeoutTicks = 3000)
     public static void fellsJungleTreeCompletely(GameTestHelper helper) {
         fellsCompletely(helper, TreeFeatures.JUNGLE_TREE);

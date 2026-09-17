@@ -258,13 +258,17 @@ public final class TreeFinder {
     }
 
     /**
-     * What a natural tree log can stand on: a log, leaves, the ground a tree grows over, or nothing solid. A log of the
-     * tree resting on planks, cobblestone or bricks is part of a build.
+     * What a natural tree log can stand on: nothing solid, a log, leaves, natural terrain (stone, dirt, sand, sandstone,
+     * terracotta, ores, snow, ice), or what generates beside trees (pumpkins, melons, huge mushrooms, bamboo, boulders,
+     * bee nests, azaleas, dripstone). A log of the tree resting on planks, cobblestone or bricks is part of a build.
      */
     private static boolean naturalSupport(BlockState below) {
-        return !below.blocksMotion() || below.is(BlockTags.LOGS) || below.is(BlockTags.LEAVES) || below.is(BlockTags.DIRT)
-                || below.is(BlockTags.SAND) || below.is(BlockTags.BASE_STONE_OVERWORLD) || below.is(BlockTags.SNOW)
-                || below.is(BlockTags.TERRACOTTA) || below.is(Blocks.GRAVEL) || below.is(Blocks.CLAY) || below.is(Blocks.ICE)
-                || below.is(Blocks.PACKED_ICE) || below.is(Blocks.MOSSY_COBBLESTONE) || below.is(Blocks.COCOA) || below.is(Blocks.BEE_NEST);
+        return !below.blocksMotion() || below.is(BlockTags.LOGS) || below.is(BlockTags.LEAVES)
+                || below.is(BlockTags.OVERWORLD_CARVER_REPLACEABLES) || below.is(BlockTags.SNOW) || below.is(BlockTags.ICE)
+                || below.is(Blocks.CLAY) || below.is(Blocks.MOSSY_COBBLESTONE) || below.is(Blocks.PUMPKIN) || below.is(Blocks.MELON)
+                || below.is(Blocks.MUSHROOM_STEM) || below.is(Blocks.RED_MUSHROOM_BLOCK) || below.is(Blocks.BROWN_MUSHROOM_BLOCK)
+                || below.is(Blocks.BAMBOO) || below.is(Blocks.COCOA) || below.is(Blocks.BEE_NEST) || below.is(Blocks.AZALEA)
+                || below.is(Blocks.FLOWERING_AZALEA) || below.is(Blocks.DRIPSTONE_BLOCK) || below.is(Blocks.POINTED_DRIPSTONE)
+                || below.is(Blocks.MOSS_BLOCK) || below.is(Blocks.AMETHYST_BLOCK) || below.is(Blocks.OBSIDIAN);
     }
 }
