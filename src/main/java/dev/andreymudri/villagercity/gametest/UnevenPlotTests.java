@@ -135,6 +135,19 @@ public final class UnevenPlotTests {
         helper.succeed();
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_max_variance")
+    public static void theMostVariedGroundIsAcceptedWhenItsEarthworkIsSmall(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // One row of 7 columns at y1 and six rows at y7: a variance of exactly 6, levelled at y7 for 7 * 6 = 42 blocks.
+        onlySpotAt10(helper, x -> x == 9 ? 0 : 6);
+        PlotPlanner.Site site = PlotPlanner.findSite(helper.getLevel(), village(helper), HOUSE, true, pos -> true)
+                .orElseThrow(() -> new AssertionError("a spot varying by " + Earthwork.MAX_VARIANCE + " with little earthwork was refused"));
+        BlockPos origin = relative(helper, site.origin());
+        helper.assertTrue(origin.equals(new BlockPos(10, 7, 10)), "origin " + origin);
+        helper.assertTrue(site.earthwork() == 42, "earthwork " + site.earthwork());
+        helper.succeed();
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_path_columns")
     public static void pathColumnsAreNeverBuiltOn(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
@@ -209,6 +222,30 @@ public final class UnevenPlotTests {
             helper.assertTrue(storehouse.counts().equals(stocked), "withdrew materials for an unprepared plot");
             helper.assertTrue("the paver to prepare the plot".equals(job.waitingFor()), "waiting for " + job.waitingFor());
             VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_builder_no_paver", timeoutTicks = 1400)
+    public static void aBuilderWithoutAPaverClaimsNoSlopedPlot(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        terraces(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        BuilderTests.stockedStorehouse(helper, village, blueprint, 1);
+        Villager villager = GameTestSupport.spawnVillager(helper, 22, 2, 20);
+        BuilderJob job = new BuilderJob();
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        long started = helper.getLevel().getGameTime();
+        // Long enough for several plot searches, which retry every PLOT_SEARCH_RETRY_TICKS after a failed one.
+        helper.runAfterDelay(5 * BuilderJob.PLOT_SEARCH_RETRY_TICKS + 100, () -> {
+            String plots = village.plots().stream().map(plot -> relative(helper, plot.origin()).toString()).toList() + " after " + (helper.getLevel().getGameTime() - started) + " ticks";
+            boolean none = village.plots().isEmpty();
+            String waiting = job.waitingFor();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(village.jobCount(JobType.PAVER) == 0, "the village has a paver");
+            helper.assertTrue(none, "claimed a sloped plot with no paver to prepare it: " + plots);
+            helper.assertTrue("a buildable plot near the bell".equals(waiting), "waiting for " + waiting);
+            helper.succeed();
         });
     }
 }
