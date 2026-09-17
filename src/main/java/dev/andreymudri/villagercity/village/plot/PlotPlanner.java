@@ -11,24 +11,37 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
  * Slice 1 plot rule: spiral out from the village center, at most {@link #MAX_REACH} blocks, and take the first buildable
- * spot. A column's ground is its topmost solid block, accepted within {@link #MAX_VERTICAL} blocks above and below the
- * bell, so a bell on a hill still finds the village's ground below it while caves and overhangs are never used.
+ * spot. A column's ground is its topmost solid block, accepted within {@link #verticalReach} blocks above and below
+ * the bell, so a bell on a hill still finds the village's ground below it while caves and overhangs are never used.
  */
 public final class PlotPlanner {
     public static final int SEARCH_MARGIN = 16;
     public static final int STEP = 2;
-    /** How far above or below the bell a plot's ground may lie. */
-    public static final int MAX_VERTICAL = 16;
+    /** Least a plot's ground may lie above or below the bell, however young the village. */
+    public static final int MIN_VERTICAL = 24;
+    /** Most a plot's ground may ever lie above or below the bell. */
+    public static final int MAX_VERTICAL = 48;
     /** Farthest a spot's center may lie from the bell (Chebyshev), however large the village grows. */
     public static final int MAX_REACH = 48;
 
     private PlotPlanner() {
+    }
+
+    /**
+     * How far above or below the bell a plot's ground may lie: the village's own radius, never under
+     * {@link #MIN_VERTICAL} and never over {@link #MAX_VERTICAL}. A young village stays gathered around its bell, while
+     * one that has already grown outwards may climb the mountainside and drop into the valley as far as it reaches on
+     * the flat, since {@link #MAX_VERTICAL} equals {@link #MAX_REACH}: the ground it may use is at most a cube.
+     */
+    public static int verticalReach(int radius) {
+        return Mth.clamp(radius, MIN_VERTICAL, MAX_VERTICAL);
     }
 
     /** A buildable spot: its origin (minimum corner, at the floor's first free y) and the blocks to cut plus fill to level it. */
@@ -83,7 +96,7 @@ public final class PlotPlanner {
                     long key = BlockPos.asLong(x, 0, z);
                     Column column = cache.get(key);
                     if (column == null) {
-                        column = sample(level, x, z, center.getY());
+                        column = sample(level, x, z, center.getY(), verticalReach(village.radius()));
                         cache.put(key, column);
                     }
                     low = Math.min(low, column.groundY());
@@ -114,18 +127,18 @@ public final class PlotPlanner {
 
     /**
      * The column's ground: its topmost block that blocks motion, leaves and barriers aside (GameTest areas have a barrier
-     * ceiling). Missing when the column is unloaded or that ground lies more than {@link #MAX_VERTICAL} blocks from the
+     * ceiling). Missing when the column is unloaded or that ground lies more than {@code verticalReach} blocks from the
      * bell, so nothing is ever built in a cave or under an overhang.
      */
-    static Column sample(ServerLevel level, int x, int z, int referenceY) {
+    static Column sample(ServerLevel level, int x, int z, int referenceY, int verticalReach) {
         if (!level.isLoaded(new BlockPos(x, referenceY, z))) {
             return Column.MISSING;
         }
         int surface = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos(x, 0, z);
-        for (int y = surface; y >= referenceY - MAX_VERTICAL; y--) {
+        for (int y = surface; y >= referenceY - verticalReach; y--) {
             BlockState state = level.getBlockState(pos.setY(y));
-            if (y > referenceY + MAX_VERTICAL) {
+            if (y > referenceY + verticalReach) {
                 if (state.blocksMotion() && !state.is(BlockTags.LEAVES) && !state.is(Blocks.BARRIER)) {
                     return Column.MISSING;
                 }

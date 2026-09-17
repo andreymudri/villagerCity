@@ -81,6 +81,67 @@ public final class UnevenPlotTests {
         }
     }
 
+    /**
+     * Covers the area with logs (never buildable) except a flat dirt plateau at x 30..44, z 30..44 whose first free y is
+     * {@code 1 + height}, so the only buildable spot lies that far above the bell at relative y 1.
+     */
+    private static void plateauAbove(GameTestHelper helper, int height) {
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if (x < 30 || x > 44 || z < 30 || z > 44) {
+                    helper.setBlock(x, 1, z, Blocks.OAK_LOG);
+                    continue;
+                }
+                for (int y = 1; y <= height; y++) {
+                    helper.setBlock(x, y, z, Blocks.DIRT);
+                }
+            }
+        }
+    }
+
+    /** Whether a test-relative origin lies on the plateau {@link #plateauAbove} raises, margin included. */
+    private static boolean onTheShelf(BlockPos origin) {
+        return origin.getX() >= 31 && origin.getX() <= 39 && origin.getZ() >= 31 && origin.getZ() <= 39;
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_vertical_reach", timeoutTicks = 400)
+    public static void aShelfWellAboveTheBellIsOnlyReachedByAGrownVillage(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // The only buildable ground is a shelf 32 blocks above the bell.
+        int height = 32;
+        plateauAbove(helper, height);
+        VillageData small = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 4);
+        helper.assertTrue(PlotPlanner.find(helper.getLevel(), small, HOUSE).isEmpty(),
+                "a young village whose reach is " + PlotPlanner.verticalReach(4) + " blocks planned a plot " + height + " blocks up the mountain");
+        VillageData grown = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), height);
+        BlockPos origin = relative(helper, PlotPlanner.find(helper.getLevel(), grown, HOUSE)
+                .orElseThrow(() -> new AssertionError("a village of radius " + height + " found nowhere to build at all")));
+        helper.assertTrue(onTheShelf(origin) && origin.getY() == height + 1,
+                "a village of radius " + height + " planned at " + origin + " instead of the shelf " + height + " blocks above its bell");
+
+        // Nothing is built under an overhang, however far the village reaches: a roof above the reach hides the shelf.
+        int roofY = 1 + PlotPlanner.verticalReach(height) + 5;
+        for (int x = 30; x <= 44; x++) {
+            for (int z = 30; z <= 44; z++) {
+                helper.setBlock(x, roofY, z, Blocks.STONE);
+            }
+        }
+        Optional<BlockPos> roofed = PlotPlanner.find(helper.getLevel(), grown, HOUSE).map(pos -> relative(helper, pos));
+        for (int x = 30; x <= 44; x++) {
+            for (int z = 30; z <= 44; z++) {
+                helper.setBlock(x, roofY, z, Blocks.AIR);
+            }
+        }
+        helper.assertFalse(roofed.filter(UnevenPlotTests::onTheShelf).isPresent(), "planned under the roof at " + roofed);
+
+        // The reach is the village's radius, between the two bounds.
+        helper.assertTrue(PlotPlanner.verticalReach(0) == PlotPlanner.MIN_VERTICAL, "reach of a new village " + PlotPlanner.verticalReach(0));
+        helper.assertTrue(PlotPlanner.verticalReach(height) == height, "reach of a radius-" + height + " village " + PlotPlanner.verticalReach(height));
+        helper.assertTrue(PlotPlanner.verticalReach(VillageData.DEFAULT_RADIUS * 4) == PlotPlanner.MAX_VERTICAL,
+                "reach of a huge village " + PlotPlanner.verticalReach(VillageData.DEFAULT_RADIUS * 4));
+        helper.succeed();
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_slope_paver")
     public static void aSlopeIsOnlyPlannedWithAPaver(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
