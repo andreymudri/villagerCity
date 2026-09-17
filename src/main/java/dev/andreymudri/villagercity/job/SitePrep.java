@@ -29,6 +29,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.BushBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -196,11 +197,15 @@ public final class SitePrep implements Job {
         return false;
     }
 
-    /** The highest y in {@code [floor, floor + MAX_RISE]} that blocks motion and is not leaves; {@code floor - 1} when none. */
+    /**
+     * The highest y in {@code [floor, floor + MAX_RISE]} that blocks motion, leaves and barriers aside (GameTest
+     * areas have a barrier ceiling, excluded here the same way {@code PlotPlanner.sample} and {@code PathRoute.groundAt}
+     * exclude it); {@code floor - 1} when none.
+     */
     private static int columnTop(ServerLevel level, int x, int z, int floor) {
         for (int y = floor + MAX_RISE; y >= floor; y--) {
             BlockState state = level.getBlockState(new BlockPos(x, y, z));
-            if (state.blocksMotion() && !state.is(BlockTags.LEAVES)) {
+            if (state.blocksMotion() && !state.is(BlockTags.LEAVES) && !state.is(Blocks.BARRIER)) {
                 return y;
             }
         }

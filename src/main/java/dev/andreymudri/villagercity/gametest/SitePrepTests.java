@@ -312,6 +312,24 @@ public final class SitePrepTests {
         });
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_siteprep_no_sky_access", timeoutTicks = 800)
+    public static void preparesAPlotUnderTheGameTestBarrierCeiling(GameTestHelper helper) {
+        // No skyAccess here on purpose: every other test in this file dodges the GameTest structure's barrier
+        // ceiling with it, but nothing pins that the paver actually tolerates that ceiling on its own.
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 12, false);
+        int floor = 5;
+        BlockPos origin = new BlockPos(10, floor, 10);
+        village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", helper.absolutePos(origin), new Vec3i(3, 1, 3), null, 0L, 0, false));
+        platform(helper, floor, 5, 5, 25, 25);
+        pavingVillager(helper, 16, floor, 16, village);
+        helper.succeedWhen(() -> {
+            Plot plot = village.plots().get(0);
+            helper.assertTrue(plot.prepared(), "not prepared yet");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_siteprep_skip_release", timeoutTicks = 1500, skyAccess = true)
     public static void releasesAnImpossiblePlotAfterFiveFailures(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
