@@ -45,6 +45,7 @@ import net.neoforged.neoforge.event.RegisterCommandsEvent;
 /**
  * /villagercity village — prints the nearest village's state.
  * /villagercity show [seconds|off] — outlines its areas in dust.
+ * /villagercity why — says whether the spot you stand on could hold a house, and what rejects it.
  * /villagercity stock [houses] — fills its storehouse with starter house materials, for testing.
  */
 @EventBusSubscriber(modid = VillagerCity.MODID)
@@ -62,6 +63,7 @@ public final class VillageCommand {
         event.getDispatcher().register(Commands.literal("villagercity")
                 .requires(source -> source.hasPermission(2))
                 .then(Commands.literal("village").executes(context -> show(context.getSource())))
+                .then(Commands.literal("why").executes(context -> why(context.getSource())))
                 .then(Commands.literal("show")
                         .executes(context -> show(context.getSource(), VillageOutline.DEFAULT_SECONDS))
                         .then(Commands.literal("off").executes(context -> hide(context.getSource())))
@@ -71,6 +73,25 @@ public final class VillageCommand {
                         .executes(context -> stock(context.getSource(), DEFAULT_STOCK_HOUSES))
                         .then(Commands.argument("houses", IntegerArgumentType.integer(1, MAX_STOCK_HOUSES))
                                 .executes(context -> stock(context.getSource(), IntegerArgumentType.getInteger(context, "houses"))))));
+    }
+
+    /** Explains whether the spot the caller stands on could hold a starter house, and which rule turns it down. */
+    private static int why(CommandSourceStack source) {
+        ServerLevel level = source.getLevel();
+        VillageData village = VillageRegistry.get(level).nearest(BlockPos.containing(source.getPosition()), SEARCH_DISTANCE);
+        if (village == null) {
+            source.sendFailure(Component.literal("No village within " + SEARCH_DISTANCE + " blocks"));
+            return 0;
+        }
+        Optional<Blueprint> blueprint = Blueprints.load(level, Blueprints.STARTER_HOUSE);
+        if (blueprint.isEmpty()) {
+            source.sendFailure(Component.literal("The starter house blueprint could not be read"));
+            return 0;
+        }
+        for (String line : PlotDiagnostics.explain(level, village, BlockPos.containing(source.getPosition()), blueprint.get().size())) {
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+        return 1;
     }
 
     /**
