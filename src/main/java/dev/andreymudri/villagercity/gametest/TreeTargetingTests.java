@@ -78,6 +78,19 @@ public final class TreeTargetingTests {
         helper.succeed();
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_beam")
+    public static void rejectsLogBeamWithoutLogAbove(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 26; x <= 28; x++) {
+            helper.setBlock(new BlockPos(x, 1, 26), Blocks.OAK_LOG);
+            helper.setBlock(new BlockPos(x, 2, 26), Blocks.OAK_LEAVES);
+        }
+        helper.setBlock(new BlockPos(26, 1, 27), Blocks.OAK_LEAVES);
+        Optional<TreeFinder.Tree> tree = TreeFinder.trunk(helper.getLevel(), helper.absolutePos(new BlockPos(26, 1, 26)));
+        helper.assertTrue(tree.isEmpty(), "flat log beam accepted as a tree");
+        helper.succeed();
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_tree_ok")
     public static void acceptsPlantedTree(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
