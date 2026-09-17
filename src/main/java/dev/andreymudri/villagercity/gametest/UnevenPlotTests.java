@@ -129,6 +129,22 @@ public final class UnevenPlotTests {
         helper.succeed();
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_anchored_storehouse")
+    public static void theSearchGrowsFromTheStorehouseBeforeAnyHouseIsBuilt(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 4);
+        // Flat ground everywhere and no house yet: the storehouse is the only thing the village has built.
+        BlockPos storehouse = new BlockPos(40, 1, 40);
+        village.setStorehousePos(helper.absolutePos(storehouse));
+        BlockPos origin = relative(helper, PlotPlanner.find(helper.getLevel(), village, HOUSE)
+                .orElseThrow(() -> new AssertionError("no plot found beside the storehouse")));
+        int toStorehouse = chebyshev(origin, storehouse);
+        int toBell = chebyshev(origin, BELL);
+        helper.assertTrue(toStorehouse <= 8, "planned " + toStorehouse + " blocks from the storehouse the village should grow beside, at " + origin);
+        helper.assertTrue(toBell > toStorehouse, "planned nearer the bell (" + toBell + ") than the storehouse (" + toStorehouse + "), at " + origin);
+        helper.succeed();
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_vertical_reach", timeoutTicks = 400)
     public static void aShelfWellAboveTheBellIsOnlyReachedByAGrownVillage(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
@@ -360,8 +376,11 @@ public final class UnevenPlotTests {
         helper.succeedWhen(() -> {
             helper.assertFalse(village.isFailedPlot(helper.absolutePos(STUCK)), "a plot waiting for fill materials was blacklisted");
             if (!prepared[0]) {
-                Plot plot = village.plots().stream().filter(p -> p.id().equals(plotId)).findFirst()
-                        .orElseThrow(() -> new AssertionError("the plot was dropped instead of retried"));
+                Plot held = village.plots().stream().filter(p -> p.id().equals(plotId)).findFirst().orElse(null);
+                if (held == null) {
+                    throw new GameTestAssertException("the plot was dropped instead of retried");
+                }
+                Plot plot = held;
                 helper.assertTrue(plot.abandons() == 0, "a preparation timeout counted as an abandon: abandons " + plot.abandons());
                 if (!plot.released()) {
                     throw new GameTestAssertException("the plot has not been released for a retry yet; waiting for " + job.waitingFor());
