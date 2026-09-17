@@ -19,6 +19,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LeavesBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -86,6 +87,7 @@ public final class TreeFinder {
      */
     public static Optional<Tree> findNearest(ServerLevel level, BlockPos from, VillageData village, Predicate<BlockPos> skipBase) {
         int villageReach = village.radius() + VILLAGE_MARGIN;
+        Set<BlockPos> walked = new HashSet<>();
         for (int[] offset : SPIRAL) {
             int x = from.getX() + offset[0];
             int z = from.getZ() + offset[1];
@@ -100,13 +102,16 @@ public final class TreeFinder {
                 if (!level.getBlockState(pos).is(BlockTags.LOGS) || !level.getBlockState(pos.below()).is(BlockTags.DIRT)) {
                     continue;
                 }
-                boolean felling = fellingNear(village, pos);
-                if (!felling && !hasLogAbove(level, pos)) {
+                // Another column of a tree walked in this search, or a corner of a skipped or remembered 2x2 trunk.
+                if (walked.contains(pos) || nearBase(pos, skipBase) || (!nearBase(pos, village::isFelling) && !hasLogAbove(level, pos))) {
                     break;
                 }
                 Optional<Tree> tree = shape(level, pos);
-                if (tree.isPresent() && !skipBase.test(tree.get().base()) && (tree.get().natural() || village.isFelling(tree.get().base()))) {
-                    return tree;
+                if (tree.isPresent()) {
+                    walked.addAll(tree.get().logs());
+                    if (!skipBase.test(tree.get().base()) && (tree.get().natural() || village.isFelling(tree.get().base()))) {
+                        return tree;
+                    }
                 }
                 break;
             }
@@ -114,9 +119,9 @@ public final class TreeFinder {
         return Optional.empty();
     }
 
-    /** Remembered bases are ground-layer corners with the smallest x and z, so the column's own 2x2 to the west and north. */
-    private static boolean fellingNear(VillageData village, BlockPos pos) {
-        return village.isFelling(pos) || village.isFelling(pos.west()) || village.isFelling(pos.north()) || village.isFelling(pos.west().north());
+    /** A base is its trunk's westmost-then-northmost ground log, so a 2x2 trunk column finds it west, north or north-west. */
+    private static boolean nearBase(BlockPos pos, Predicate<BlockPos> isBase) {
+        return isBase.test(pos) || isBase.test(pos.west()) || isBase.test(pos.north()) || isBase.test(pos.west().north());
     }
 
     /** The natural tree whose trunk stands on {@code base}: {@link #shape} with a log above the base and a canopy. */
@@ -138,7 +143,8 @@ public final class TreeFinder {
 
     /**
      * Collects the logs of the base's kind that form one tree, walking layer by layer upward from the base, sideways
-     * and diagonally up. Logs farther than {@link #MAX_SPREAD} blocks sideways (Chebyshev) are not walked. A log
+     * and diagonally up. Logs farther than {@link #MAX_SPREAD} blocks sideways (Chebyshev) from the tree's ground layer are
+     * not walked, so every trunk column walks the same tree. A log
      * standing on a log of its kind outside the tree belongs to another trunk (a neighbouring tree), so neither it
      * nor anything reached only through it is part of this tree; the layers below are complete before a layer is
      * walked, so one pass decides this. Empty when:
@@ -147,8 +153,10 @@ public final class TreeFinder {
      *   <li>the tree has more than {@link #MAX_TRUNK} logs;</li>
      *   <li>the tree's logs on the base's own layer do not fit in a 2x2, so a trunk is one column or a 2x2 while a log
      *       wall on the ground, or two trunks grown flush against each other, are not;</li>
-     *   <li>any tree log was placed by a player or citizen ({@link PlacedLogs}) or lies inside a generated structure
-     *       piece, so builds and village houses are never felled.</li>
+     *   <li>any tree log touches a log of any kind placed by a player or citizen ({@link PlacedLogs}), or lies inside
+     *       a generated structure piece, so builds, village houses and trees a build hangs on are never felled;</li>
+     *   <li>a tree log other than the base rests on a block no tree grows over (planks, cobblestone, bricks): a log
+     *       build on a foundation, placed before the mod tracked it, touching a tree.</li>
      * </ul>
      * The tree is {@code natural} when a log of its kind stands in the 3x3 directly above {@code base} (acacias lean
      * from their first log) and at least {@link #MIN_LEAVES} distinct natural (non-persistent) leaves touch it.
@@ -172,10 +180,12 @@ public final class TreeFinder {
         while (!layer.isEmpty()) {
             while (!layer.isEmpty()) {
                 BlockPos pos = layer.poll();
-                if (!pos.equals(start) && level.getBlockState(pos.below()).is(log) && !tree.contains(pos.below())) {
+                BlockState below = level.getBlockState(pos.below());
+                if (!pos.equals(start) && (below.is(log) && !tree.contains(pos.below())
+                        || Math.max(outside(pos.getX(), minX, maxX), outside(pos.getZ(), minZ, maxZ)) > MAX_SPREAD)) {
                     continue;
                 }
-                if (placed.contains(pos) || insideStructure(level, pos)) {
+                if ((!pos.equals(start) && !naturalSupport(below)) || touchesPlacedLog(level, placed, pos) || insideStructure(level, pos)) {
                     return Optional.empty();
                 }
                 tree.add(pos);
@@ -193,7 +203,7 @@ public final class TreeFinder {
                     }
                 }
                 forEachUpperNeighbour(pos, neighbour -> {
-                    if (spread(base, neighbour) <= MAX_SPREAD && !seen.contains(neighbour) && level.getBlockState(neighbour).is(log)) {
+                    if (!seen.contains(neighbour) && level.getBlockState(neighbour).is(log)) {
                         BlockPos next = neighbour.immutable();
                         seen.add(next);
                         (next.getY() == pos.getY() ? layer : nextLayer).add(next);
@@ -232,7 +242,29 @@ public final class TreeFinder {
         }
     }
 
-    private static int spread(BlockPos base, BlockPos pos) {
-        return Math.max(Math.abs(pos.getX() - base.getX()), Math.abs(pos.getZ() - base.getZ()));
+    /** How far the coordinate lies outside [min, max]. */
+    private static int outside(int value, int min, int max) {
+        return Math.max(0, Math.max(min - value, value - max));
+    }
+
+    /** True when the log or any log touching it (of any kind, stripped or not) was placed by a player or citizen. */
+    private static boolean touchesPlacedLog(ServerLevel level, PlacedLogs placed, BlockPos pos) {
+        for (BlockPos near : BlockPos.betweenClosed(pos.offset(-1, -1, -1), pos.offset(1, 1, 1))) {
+            if (placed.contains(near) && level.getBlockState(near).is(BlockTags.LOGS)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * What a natural tree log can stand on: a log, leaves, the ground a tree grows over, or nothing solid. A log of the
+     * tree resting on planks, cobblestone or bricks is part of a build.
+     */
+    private static boolean naturalSupport(BlockState below) {
+        return !below.blocksMotion() || below.is(BlockTags.LOGS) || below.is(BlockTags.LEAVES) || below.is(BlockTags.DIRT)
+                || below.is(BlockTags.SAND) || below.is(BlockTags.BASE_STONE_OVERWORLD) || below.is(BlockTags.SNOW)
+                || below.is(BlockTags.TERRACOTTA) || below.is(Blocks.GRAVEL) || below.is(Blocks.CLAY) || below.is(Blocks.ICE)
+                || below.is(Blocks.PACKED_ICE) || below.is(Blocks.MOSSY_COBBLESTONE) || below.is(Blocks.COCOA) || below.is(Blocks.BEE_NEST);
     }
 }

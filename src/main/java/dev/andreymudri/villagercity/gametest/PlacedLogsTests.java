@@ -29,6 +29,7 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 import net.neoforged.neoforge.event.EventHooks;
 import net.neoforged.neoforge.event.level.BlockEvent;
+import net.neoforged.neoforge.event.level.ChunkEvent;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -47,6 +48,7 @@ public final class PlacedLogsTests {
         });
     }
 
+    @SuppressWarnings("removal")
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_placed_break")
     public static void onlyABreakThatRemovedTheLogForgetsIt(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
@@ -92,6 +94,15 @@ public final class PlacedLogsTests {
         helper.assertTrue(burntForgotten, "removed log still remembered after a sweep");
         helper.assertTrue(standingKept, "standing log forgotten by a sweep");
         helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_placed_sweep_ticks", timeoutTicks = PlacedLogs.SWEEP_TICKS * 2)
+    public static void theSweepRunsOnItsOwn(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        BlockPos burnt = log(helper, 10, 10);
+        level.setBlock(burnt, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        helper.succeedWhen(() -> helper.assertTrue(!PlacedLogs.get(level).contains(burnt), "removed log still remembered"));
     }
 
     @SuppressWarnings("removal")
@@ -178,6 +189,137 @@ public final class PlacedLogsTests {
                     PlacedLogs.get(level).remove(start);
                 })
                 .thenSucceed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_placed_piston_rows", timeoutTicks = 100)
+    public static void pistonsCarryRowsAndSlimeAttachedLogs(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        PlacedLogs logs = PlacedLogs.get(level);
+        helper.setBlock(new BlockPos(10, 2, 30), Blocks.STICKY_PISTON.defaultBlockState().setValue(PistonBaseBlock.FACING, Direction.EAST));
+        helper.setBlock(new BlockPos(11, 2, 30), Blocks.SLIME_BLOCK);
+        BlockPos side = new BlockPos(11, 2, 31);
+        helper.setBlock(side, Blocks.OAK_LOG);
+        helper.setBlock(new BlockPos(10, 1, 40), Blocks.STICKY_PISTON.defaultBlockState().setValue(PistonBaseBlock.FACING, Direction.EAST));
+        List<BlockPos> row = List.of(new BlockPos(11, 1, 40), new BlockPos(12, 1, 40), new BlockPos(13, 1, 40));
+        row.forEach(pos -> helper.setBlock(pos, Blocks.OAK_LOG));
+        List<BlockPos> tracked = new ArrayList<>(row);
+        tracked.add(side);
+        tracked.forEach(pos -> logs.add(helper.absolutePos(pos)));
+        helper.startSequence()
+                .thenExecute(() -> {
+                    helper.setBlock(new BlockPos(9, 2, 30), Blocks.REDSTONE_BLOCK);
+                    helper.setBlock(new BlockPos(9, 1, 40), Blocks.REDSTONE_BLOCK);
+                })
+                .thenExecuteAfter(1, () -> {
+                    // Still moving: neither the sweep nor a break check may drop them now.
+                    logs.sweep(level);
+                })
+                .thenExecuteAfter(6, () -> {
+                    List<String> wrong = entries(helper, logs, tracked, tracked.stream().map(BlockPos::east).toList());
+                    helper.setBlock(new BlockPos(9, 2, 30), Blocks.AIR);
+                    helper.setBlock(new BlockPos(9, 1, 40), Blocks.AIR);
+                    helper.assertTrue(wrong.isEmpty(), "after the push: " + wrong);
+                })
+                .thenExecuteAfter(6, () -> {
+                    // The sticky piston pulls back only the log it touches.
+                    List<String> wrong = entries(helper, logs, tracked, List.of(side, row.get(0), row.get(2), row.get(2).east()));
+                    tracked.forEach(pos -> {
+                        logs.remove(helper.absolutePos(pos));
+                        logs.remove(helper.absolutePos(pos.east()));
+                    });
+                    helper.assertTrue(wrong.isEmpty(), "after the pull: " + wrong);
+                })
+                .thenSucceed();
+    }
+
+    /** Problems when the logs that started at {@code starts} are not remembered exactly at {@code expected}. */
+    private static List<String> entries(GameTestHelper helper, PlacedLogs logs, List<BlockPos> starts, List<BlockPos> expected) {
+        List<String> wrong = new ArrayList<>();
+        for (BlockPos pos : expected) {
+            if (!helper.getBlockState(pos).is(Blocks.OAK_LOG) || !logs.contains(helper.absolutePos(pos))) {
+                wrong.add("missing " + pos.toShortString() + " block=" + helper.getBlockState(pos).getBlock() + " entry=" + logs.contains(helper.absolutePos(pos)));
+            }
+        }
+        for (BlockPos start : starts) {
+            for (BlockPos pos : List.of(start, start.east())) {
+                if (!expected.contains(pos) && logs.contains(helper.absolutePos(pos))) {
+                    wrong.add("stale " + pos.toShortString());
+                }
+            }
+        }
+        return wrong;
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_placed_unloaded")
+    public static void sweepNeitherLoadsNorForgetsUnloadedLogs(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos far = helper.absolutePos(new BlockPos(24, 1, 24)).offset(160_000, 0, 160_000);
+        PlacedLogs logs = PlacedLogs.get(level);
+        logs.add(far);
+        logs.sweep(level);
+        boolean kept = logs.contains(far);
+        boolean loaded = level.getChunkSource().getChunkNow(far.getX() >> 4, far.getZ() >> 4) != null;
+        logs.remove(far);
+        helper.assertTrue(!loaded, "sweep loaded the chunk of an unloaded log");
+        helper.assertTrue(kept, "sweep forgot a log in an unloaded chunk");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_placed_dirty")
+    public static void changesAreSaved(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        PlacedLogs logs = new PlacedLogs();
+        BlockPos pos = helper.absolutePos(new BlockPos(10, 1, 10));
+        logs.add(pos);
+        boolean dirtyAfterAdd = logs.isDirty();
+        logs.setDirty(false);
+        logs.remove(pos);
+        boolean dirtyAfterRemove = logs.isDirty();
+        helper.assertTrue(dirtyAfterAdd && dirtyAfterRemove, "not marked for saving: add " + dirtyAfterAdd + ", remove " + dirtyAfterRemove);
+
+        // A chunk holding a remembered log unloads: its entry is written now, not only with the next autosave.
+        helper.setBlock(new BlockPos(10, 1, 10), Blocks.OAK_LOG);
+        PlacedLogs shared = PlacedLogs.get(level);
+        shared.add(pos);
+        PlacedLogs.onChunkUnload(new ChunkEvent.Unload(level.getChunk(pos)));
+        boolean savedOnUnload = !shared.isDirty();
+        shared.remove(pos);
+        helper.assertTrue(savedOnUnload, "placed logs not saved when their chunk unloaded");
+        helper.succeed();
+    }
+
+    @SuppressWarnings("removal")
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_placed_fungus", timeoutTicks = 200)
+    public static void fungusGrownWithBoneMealIsNotPlaced(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        ServerLevel level = helper.getLevel();
+        ServerPlayer player = helper.makeMockServerPlayerInLevel();
+        player.setGameMode(GameType.SURVIVAL);
+        BlockPos fungus = helper.absolutePos(new BlockPos(24, 1, 24));
+        level.setBlock(fungus.below(), Blocks.CRIMSON_NYLIUM.defaultBlockState(), Block.UPDATE_ALL);
+        level.setBlock(fungus, Blocks.CRIMSON_FUNGUS.defaultBlockState(), Block.UPDATE_ALL);
+        for (int attempt = 0; attempt < 200 && !level.getBlockState(fungus).is(BlockTags.LOGS); attempt++) {
+            ItemStack boneMeal = new ItemStack(Items.BONE_MEAL, 64);
+            player.setItemInHand(InteractionHand.MAIN_HAND, boneMeal);
+            player.gameMode.useItemOn(player, level, boneMeal, InteractionHand.MAIN_HAND, new BlockHitResult(Vec3.atCenterOf(fungus), Direction.UP, fungus, false));
+        }
+        level.getServer().getPlayerList().remove(player);
+        boolean grew = level.getBlockState(fungus).is(BlockTags.LOGS);
+        List<BlockPos> remembered = new ArrayList<>();
+        for (BlockPos pos : BlockPos.betweenClosed(fungus.offset(-4, 0, -4), fungus.offset(4, 30, 4))) {
+            if (PlacedLogs.get(level).contains(pos)) {
+                remembered.add(pos.immutable());
+            }
+            if (pos.getY() >= fungus.getY()) {
+                level.setBlock(pos, Blocks.AIR.defaultBlockState(), Block.UPDATE_CLIENTS);
+            }
+        }
+        remembered.forEach(PlacedLogs.get(level)::remove);
+        helper.assertTrue(grew, "fungus never grew");
+        helper.assertTrue(remembered.isEmpty(), "bone-meal fungus remembered as placed at " + remembered);
+        helper.succeed();
     }
 
     /** An oak log at (x, 1, z), remembered as placed; returns its absolute position. */

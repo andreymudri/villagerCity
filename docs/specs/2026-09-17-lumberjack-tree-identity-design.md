@@ -27,14 +27,18 @@ entity placed. The set is saved as a long array.
   fires before the break happens: another listener may cancel it, or a mod may post one just to ask permission. A
   sweep every 200 ticks covers removals no event reports (fire, explosions, commands), skipping unloaded chunks and
   moving pistons.
-- **Pistons:** on `PistonEvent.Pre` (at `LOWEST`), the logs remembered within 14 blocks of the piston are noted. On
-  `Post`, each noted log whose position no longer holds a log, and whose next position along the motion holds a
-  moving piston carrying a log in that direction, moves its entry there.
+- **Pistons:** on `PistonEvent.Pre` (at `LOWEST`), the logs remembered within 14 blocks of the piston are noted,
+  read from an index of entries by chunk. On `Post`, each noted log whose position no longer holds a log, and whose
+  next position along the motion holds a moving block carrying a log, moves its entry there.
+- **Crash safety:** chunks are written when they unload, but saved data only with the level. When a chunk holding
+  remembered logs unloads while the data is dirty, the data is written too.
 - **Not covered:** logs placed before the mod was installed, and commands (`/setblock`, `/fill`).
 
 ### 2. A tree touching a placed log or a structure is not a tree
 
-`TreeFinder.shape` rejects the whole tree when any of its logs is in `PlacedLogs`. It also rejects the tree when any
+`TreeFinder.shape` rejects the whole tree when any of its logs touches (in its 3x3x3) a remembered log of any kind:
+a stripped trunk log, a spruce beam, oak wood. It also rejects a tree when a log other than the base rests on a
+block no tree grows over (planks, cobblestone, bricks), which catches untracked log walls on a foundation. It also rejects the tree when any
 of its logs lies inside a generated structure piece. `insideStructure` reads the chunk's structure references and
 the starts they point to without loading chunks. A start that is not in memory counts as covering the position,
 which only postpones felling there. The result: village houses, and decor trees inside village pieces, are never
@@ -50,14 +54,17 @@ trees of a dense dark oak farm. A neighbouring tree keeps its trunk, and branche
 with it.
 
 The other rules stay:
-- the tree's logs on the base layer fit in a 2x2, with branches spreading up to 6;
+- the tree's logs on the base layer fit in a 2x2, with branches spreading up to 6 from that 2x2, so every trunk
+  column walks the same tree;
 - at most 256 logs.
 
 **Natural** trees also need at least 4 natural leaves and a log of the same kind in the 3x3 above the scanned base.
 `trunk` requires both. `shape` reports them as a flag.
 
 A tree is named by its **base**: the ground-layer log with the smallest x, then the smallest z. Any corner of a
-2x2 trunk gives the same base. Fellings and the lumberjack's avoid list are keyed on it.
+2x2 trunk gives the same base. Fellings and the lumberjack's avoid list are keyed on it. `findNearest` skips a
+column whose own position, or the one west, north or north-west of it, is an avoided base, and a column whose log
+belongs to a tree already walked in the same search, so avoided trees cost no walk.
 
 ### 4. Felling survives interruption
 
@@ -68,8 +75,9 @@ A tree is named by its **base**: the ground-layer log with the smallest x, then 
 - **Checked again before breaking:** right before breaking a log, `ChopTree` skips it if it is no longer the tree's
   block, or if it is now in `PlacedLogs`. A log someone put in the tree after planning stays.
 - **Remembered felling:** `VillageData` keeps a saved set `felling` of tree bases (codec
-  `optionalFieldOf("felling")`, a list of `BlockPos`). `LumberjackJob` adds the base when it starts a felling and
-  removes it when the task finishes with the base no longer a log. A felling cut short by a failed walk-back, a
+  `optionalFieldOf("felling")`, a list of `BlockPos`). `ChopTree` adds the base once it breaks the first log, so an
+  unreachable tree is never remembered. `LumberjackJob` removes it when the task finishes with the base no longer a
+  log, and `plan` drops loaded entries whose base is gone. A felling cut short by a failed walk-back, a
   reload or a released citizen therefore stays remembered.
 - **Finding a remembered tree:** `TreeFinder.findNearest` accepts a remembered base without the leaves and
   log-above rules, because top-down felling removes them first. A ground layer left as four stumps is still found.
@@ -106,4 +114,22 @@ A tree is named by its **base**: the ground-layer log with the smallest x, then 
   - logs replaced after planning (another kind, or placed) stay standing;
   - four stumps of a remembered felling are found and cleared, and the felling is forgotten;
   - a remembered felling survives a save.
+- **Review round 3:**
+  - a stripped trunk log, placed beams of other log kinds, and a placed post touching a branch protect the tree;
+  - untracked log walls on cobblestone, planks or stone bricks are not absorbed into a tree;
+  - three natural leaves are not a canopy, four are, and persistent leaves do not count;
+  - a structure whose start chunk is not loaded still covers, without loading it;
+  - a 2x2 trunk of 256 logs is a tree, one of 260 is not;
+  - every corner of a 2x2 trunk walks the same logs;
+  - 81 avoided dark oaks are searched in under 6 ms;
+  - an unreachable tree is not remembered as felling;
+  - pistons carry rows of logs and slime-attached logs out and back, and a sweep during the move keeps them;
+  - the sweep runs on its own, and neither loads nor forgets logs in unloaded chunks;
+  - adding and removing marks the data dirty, and a chunk unload writes it;
+  - a crimson fungus grown with bone meal is not placed.
+- **Known, not fixed:**
+  - rows of 1x1 trees with no gap merge into one ground layer wider than 2x2 and are never felled;
+  - felling one tree of a dense grove can take branch logs, and a shifted trunk segment, from a neighbour;
+  - a tree whose branch rests on a man-made block is never felled;
+  - a player breaking the base mid-felling leaves the rest floating.
 - **Existing tests:** all of them stay green.

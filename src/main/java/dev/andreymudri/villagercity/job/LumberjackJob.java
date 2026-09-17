@@ -67,7 +67,7 @@ public final class LumberjackJob implements Job {
         avoidUntil.values().removeIf(until -> until <= now);
         target = null;
         for (BlockPos base : ctx.village().felling()) {
-            if (!ctx.level().getBlockState(base).is(BlockTags.LOGS)) {
+            if (ctx.level().isLoaded(base) && !ctx.level().getBlockState(base).is(BlockTags.LOGS)) {
                 forgetFelling(ctx, base);
             }
         }
@@ -82,9 +82,6 @@ public final class LumberjackJob implements Job {
         }
         TreeFinder.Tree found = tree.get();
         target = found.base();
-        if (ctx.village().startFelling(found.base())) {
-            VillageRegistry.get(ctx.level()).setDirty();
-        }
         return TaskSequence.of(
                 new MoveTo(found.base(), 2.5),
                 new ChopTree(found.base(), found.logs(), found.logBlock()),

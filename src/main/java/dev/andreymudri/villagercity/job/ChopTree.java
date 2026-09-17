@@ -4,6 +4,7 @@ import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
 import dev.andreymudri.villagercity.citizen.task.BreakBlock;
 import dev.andreymudri.villagercity.citizen.task.MoveTo;
+import dev.andreymudri.villagercity.village.VillageRegistry;
 import java.util.ArrayDeque;
 import java.util.Deque;
 import java.util.List;
@@ -71,8 +72,7 @@ final class ChopTree implements Task {
             }
             remaining.poll();
             if (!ctx.level().getBlockState(next).is(logBlock)
-                    || PlacedLogs.get(ctx.level()).contains(next)
-                    || ctx.villager().distanceToSqr(Vec3.atCenterOf(next)) > FELL_REACH * FELL_REACH) {
+                    || PlacedLogs.get(ctx.level()).contains(next)) {
                 continue;
             }
             breaking = next;
@@ -80,6 +80,10 @@ final class ChopTree implements Task {
             current.start(ctx);
         }
         Status status = current.tick(ctx);
+        if (status == Status.SUCCESS && ctx.village().startFelling(base)) {
+            // Remembered once a log is down: from here on the tree may lack its canopy until the base goes.
+            VillageRegistry.get(ctx.level()).setDirty();
+        }
         if (status != Status.RUNNING) {
             current.stop(ctx);
             current = null;

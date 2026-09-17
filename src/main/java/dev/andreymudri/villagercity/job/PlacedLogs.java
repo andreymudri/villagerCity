@@ -1,27 +1,35 @@
 package dev.andreymudri.villagercity.job;
 
 import dev.andreymudri.villagercity.VillagerCity;
+import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import it.unimi.dsi.fastutil.longs.LongSet;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.SectionPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.FungusBlock;
 import net.minecraft.world.level.block.piston.PistonMovingBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.storage.LevelResource;
 import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 import net.neoforged.neoforge.event.level.BlockEvent;
+import net.neoforged.neoforge.event.level.ChunkEvent;
 import net.neoforged.neoforge.event.level.PistonEvent;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
@@ -42,8 +50,11 @@ public final class PlacedLogs extends SavedData {
     private static final SavedData.Factory<PlacedLogs> FACTORY = new SavedData.Factory<>(PlacedLogs::new, PlacedLogs::load, null);
 
     private final LongSet positions = new LongOpenHashSet();
+    /** The same positions grouped by chunk, so a piston only looks at the chunks it can reach. */
+    private final Long2ObjectMap<LongSet> byChunk = new Long2ObjectOpenHashMap<>();
     private final LongSet toCheck = new LongOpenHashSet();
     private @Nullable PendingPush pendingPush;
+    private int ticksSinceSweep;
 
     private record PendingPush(BlockPos piston, Direction motion, List<BlockPos> from) {
     }
@@ -55,8 +66,9 @@ public final class PlacedLogs extends SavedData {
     public static PlacedLogs load(CompoundTag tag, HolderLookup.Provider registries) {
         PlacedLogs logs = new PlacedLogs();
         for (long pos : tag.getLongArray("positions")) {
-            logs.positions.add(pos);
+            logs.add(BlockPos.of(pos));
         }
+        logs.setDirty(false);
         return logs;
     }
 
@@ -111,10 +123,20 @@ public final class PlacedLogs extends SavedData {
         PlacedLogs logs = get(level);
         logs.pendingPush = null;
         List<BlockPos> candidates = new ArrayList<>();
-        for (long packed : logs.positions) {
-            BlockPos pos = BlockPos.of(packed);
-            if (Math.max(Math.max(Math.abs(pos.getX() - event.getPos().getX()), Math.abs(pos.getY() - event.getPos().getY())), Math.abs(pos.getZ() - event.getPos().getZ())) <= PISTON_REACH && level.getBlockState(pos).is(BlockTags.LOGS)) {
-                candidates.add(pos);
+        BlockPos piston = event.getPos();
+        for (int cx = SectionPos.blockToSectionCoord(piston.getX() - PISTON_REACH); cx <= SectionPos.blockToSectionCoord(piston.getX() + PISTON_REACH); cx++) {
+            for (int cz = SectionPos.blockToSectionCoord(piston.getZ() - PISTON_REACH); cz <= SectionPos.blockToSectionCoord(piston.getZ() + PISTON_REACH); cz++) {
+                LongSet inChunk = logs.byChunk.get(ChunkPos.asLong(cx, cz));
+                if (inChunk == null) {
+                    continue;
+                }
+                for (long packed : inChunk) {
+                    BlockPos pos = BlockPos.of(packed);
+                    if (Math.abs(pos.getX() - piston.getX()) <= PISTON_REACH && Math.abs(pos.getY() - piston.getY()) <= PISTON_REACH
+                            && Math.abs(pos.getZ() - piston.getZ()) <= PISTON_REACH && level.getBlockState(pos).is(BlockTags.LOGS)) {
+                        candidates.add(pos);
+                    }
+                }
             }
         }
         if (!candidates.isEmpty()) {
@@ -123,7 +145,10 @@ public final class PlacedLogs extends SavedData {
         }
     }
 
-    /** Moves the entry of every remembered log the piston actually carried one block along its motion. */
+    /**
+     * Moves the entry of every noted log the piston actually carried one block along its motion: its position no longer
+     * holds a log, and the next one holds a moving block carrying a log, which can only have come from it.
+     */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onPistonPost(PistonEvent.Post event) {
         if (!(event.getLevel() instanceof ServerLevel level)) {
@@ -140,8 +165,6 @@ public final class PlacedLogs extends SavedData {
             BlockPos to = from.relative(push.motion());
             if (!level.getBlockState(from).is(BlockTags.LOGS)
                     && level.getBlockEntity(to) instanceof PistonMovingBlockEntity moving
-                    && !moving.isSourcePiston()
-                    && moving.getMovementDirection() == push.motion()
                     && moving.getMovedState().is(BlockTags.LOGS)) {
                 logs.remove(from);
                 moved.add(to);
@@ -163,8 +186,25 @@ public final class PlacedLogs extends SavedData {
                 logs.forgetIfGone(level, BlockPos.of(pos));
             }
         }
-        if (level.getGameTime() % SWEEP_TICKS == 0) {
+        if (++logs.ticksSinceSweep >= SWEEP_TICKS) {
+            logs.ticksSinceSweep = 0;
             logs.sweep(level);
+        }
+    }
+
+    /**
+     * A chunk is written to disk when it unloads, but this data only with the level. Saving it too when a chunk
+     * holding remembered logs unloads keeps a crash before the next autosave from leaving those logs unremembered.
+     */
+    @SubscribeEvent
+    public static void onChunkUnload(ChunkEvent.Unload event) {
+        if (!(event.getLevel() instanceof ServerLevel level)) {
+            return;
+        }
+        PlacedLogs logs = get(level);
+        if (logs.isDirty() && logs.byChunk.containsKey(event.getChunk().getPos().toLong())) {
+            Path file = DimensionType.getStorageFolder(level.dimension(), level.getServer().getWorldPath(LevelResource.ROOT)).resolve("data").resolve(NAME + ".dat");
+            logs.save(file.toFile(), level.registryAccess());
         }
     }
 
@@ -191,12 +231,18 @@ public final class PlacedLogs extends SavedData {
 
     public void add(BlockPos pos) {
         if (positions.add(pos.asLong())) {
+            byChunk.computeIfAbsent(ChunkPos.asLong(pos), chunk -> new LongOpenHashSet()).add(pos.asLong());
             setDirty();
         }
     }
 
     public void remove(BlockPos pos) {
         if (positions.remove(pos.asLong())) {
+            long chunk = ChunkPos.asLong(pos);
+            LongSet inChunk = byChunk.get(chunk);
+            if (inChunk != null && inChunk.remove(pos.asLong()) && inChunk.isEmpty()) {
+                byChunk.remove(chunk);
+            }
             setDirty();
         }
     }
