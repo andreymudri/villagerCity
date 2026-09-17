@@ -91,11 +91,11 @@ public final class PlotHandoverTests {
         helper.assertTrue(!storehouse.hasAll(blueprint.requiredMaterials()), "storehouse holds a full blueprint's materials");
         Villager first = GameTestSupport.spawnVillager(helper, 12, 1, 14);
         UUID plotId = UUID.randomUUID();
-        village.addPlot(new Plot(plotId, blueprint.id().toString(), helper.absolutePos(PLOT_ORIGIN), blueprint.size(), first.getUUID()));
+        village.addPlot(new Plot(plotId, blueprint.id().toString(), helper.absolutePos(PLOT_ORIGIN), blueprint.size(), first.getUUID(), 0L, 1));
         CitizenTestSupport.enroll(first, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
         first.discard();
         Plot plot = village.plots().stream().filter(p -> p.id().equals(plotId)).findFirst().orElse(null);
-        if (plot == null || plot.builder() != null) {
+        if (plot == null || plot.builder() != null || plot.abandons() != 1 || plot.retryAt() != 0L) {
             VillageTestSupport.remove(helper, village);
             helper.fail("plot of the discarded builder: " + plot);
             return;
