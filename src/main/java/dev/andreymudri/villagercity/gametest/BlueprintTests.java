@@ -33,7 +33,7 @@ public final class BlueprintTests {
         Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
         Map<net.minecraft.world.item.Item, Integer> expected = Map.of(
                 Items.COBBLESTONE, 25, Items.OAK_PLANKS, 57, Items.OAK_LOG, 12,
-                Items.GLASS, 2, Items.RED_BED, 1, Items.OAK_DOOR, 1);
+                Items.GLASS, 2, Items.RED_BED, 1, Items.OAK_DOOR, 1, Items.TORCH, 1);
         helper.assertTrue(blueprint.requiredMaterials().equals(expected), "materials " + blueprint.requiredMaterials());
         helper.assertTrue(Blueprint.costOf(Blocks.RED_BED.defaultBlockState().setValue(BlockStateProperties.BED_PART, BedPart.HEAD)) == Items.AIR, "bed head costs");
         helper.assertTrue(Blueprint.costOf(Blocks.OAK_DOOR.defaultBlockState().setValue(BlockStateProperties.DOUBLE_BLOCK_HALF, DoubleBlockHalf.UPPER)) == Items.AIR, "upper door costs");

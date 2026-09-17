@@ -92,7 +92,7 @@ def template(size, blocks):
 
 def starter_house():
     """5x5x5 oak house: cobblestone floor, log corners, plank walls and roof,
-    a door in the z=0 wall, glass windows east/west, a bed inside.
+    a door in the z=0 wall, glass windows east/west, a bed and a wall torch inside.
     Interior cells are explicit air so the builder clears obstructions."""
     b = {}
     for x in range(5):
@@ -115,6 +115,8 @@ def starter_house():
     b[(4, 2, 2)] = ("minecraft:glass", {})
     b[(1, 1, 3)] = ("minecraft:red_bed", {"facing": "north", "part": "foot", "occupied": "false"})
     b[(1, 1, 2)] = ("minecraft:red_bed", {"facing": "north", "part": "head", "occupied": "false"})
+    # Hangs on the inside of the plank wall at z=4, above the bed; a wall torch faces away from its wall.
+    b[(2, 2, 3)] = ("minecraft:wall_torch", {"facing": "north"})
     return template((5, 5, 5), b)
 
 
