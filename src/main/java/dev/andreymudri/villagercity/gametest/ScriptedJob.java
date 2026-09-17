@@ -14,6 +14,7 @@ import javax.annotation.Nullable;
 public final class ScriptedJob implements Job {
     private final Deque<Task> tasks;
     public final List<Task.Status> results = new CopyOnWriteArrayList<>();
+    public final List<Long> finishTimes = new CopyOnWriteArrayList<>();
 
     public ScriptedJob(Task... tasks) {
         this.tasks = new ArrayDeque<>(Arrays.asList(tasks));
@@ -27,5 +28,6 @@ public final class ScriptedJob implements Job {
     @Override
     public void onTaskFinished(TaskContext ctx, Task task, Task.Status status) {
         results.add(status);
+        finishTimes.add(ctx.gameTime());
     }
 }

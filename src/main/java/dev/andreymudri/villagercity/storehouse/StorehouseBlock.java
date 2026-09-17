@@ -2,6 +2,7 @@ package dev.andreymudri.villagercity.storehouse;
 
 import com.mojang.serialization.MapCodec;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Containers;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -43,6 +44,19 @@ public class StorehouseBlock extends BaseEntityBlock {
             player.openMenu(storehouse);
         }
         return InteractionResult.CONSUME;
+    }
+
+    /** Whoever breaks the storehouse owes its contents, which still drop in {@link #onRemove}. */
+    @Override
+    public BlockState playerWillDestroy(Level level, BlockPos pos, BlockState state, Player player) {
+        if (level instanceof ServerLevel serverLevel && level.getBlockEntity(pos) instanceof StorehouseBlockEntity storehouse) {
+            long total = 0;
+            for (int i = 0; i < StorehouseBlockEntity.SIZE; i++) {
+                total += storehouse.getItem(i).getCount();
+            }
+            StorehouseMenu.chargeDebt(serverLevel, pos, player.getUUID(), total);
+        }
+        return super.playerWillDestroy(level, pos, state, player);
     }
 
     @Override

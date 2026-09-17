@@ -7,6 +7,7 @@ import dev.andreymudri.villagercity.citizen.JobType;
 import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
 import dev.andreymudri.villagercity.village.VillageData;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.core.BlockPos;
@@ -14,6 +15,7 @@ import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.memory.MemoryModuleType;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.entity.schedule.Activity;
 import net.minecraft.world.item.ItemStack;
@@ -42,12 +44,27 @@ public final class TaskSchedulerTests {
         GameTestSupport.prepareArea(helper);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
         Villager villager = GameTestSupport.spawnVillager(helper, 24, 1, 24);
+        BlockPos bait = helper.absolutePos(new BlockPos(26, 1, 24));
+        helper.getLevel().addFreshEntity(new ItemEntity(helper.getLevel(), bait.getX() + 0.5, bait.getY(), bait.getZ() + 0.5, new ItemStack(Items.BREAD)));
         CountingTask task = new CountingTask();
         CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, ItemStack.EMPTY, new ScriptedJob(task));
+        // the nearby bread makes vanilla's GoToWantedItem core behaviour want to set WALK_TARGET. A per-tick latch
+        // does not help it survive TaskScheduler's own erase: that runs in the same entity tick as the set, so a
+        // check made after the entity's tick (as onEachTick's callback is) never observes it with the fix in place.
+        // The latch matters because with the erase removed the target is never cleared by TaskScheduler at all, so
+        // it stays set from whenever the sensor first notices the bread until the villager physically reaches it;
+        // checking on every tick catches that window reliably, where a single check at a fixed tick can land after
+        // the villager has already reached and consumed the bread (vanilla clears WALK_TARGET once reached).
+        AtomicBoolean sawWalkTarget = new AtomicBoolean();
+        helper.onEachTick(() -> {
+            if (villager.getBrain().hasMemoryValue(MemoryModuleType.WALK_TARGET)) {
+                sawWalkTarget.set(true);
+            }
+        });
         helper.runAfterDelay(40, () -> {
             helper.assertTrue(villager.getBrain().isActive(CitizenAttachments.CITY_TASK.get()), "city_task not active");
             helper.assertTrue(task.ticks.get() >= 30, "task ticked " + task.ticks.get());
-            helper.assertFalse(villager.getBrain().hasMemoryValue(MemoryModuleType.WALK_TARGET), "vanilla walk target present");
+            helper.assertFalse(sawWalkTarget.get(), "vanilla walk target present");
             VillageTestSupport.remove(helper, village);
             helper.succeed();
         });

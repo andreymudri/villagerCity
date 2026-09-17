@@ -16,9 +16,11 @@ import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.properties.BedPart;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.core.Direction;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -68,6 +70,8 @@ public final class VillageRegistryTests {
     public static void detectorIgnoresBellWithoutVillagers(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         VillageTestSupport.removeVillagesNear(helper, BELL);
+        BlockPos bellAbs = helper.absolutePos(BELL);
+        helper.getLevel().getEntitiesOfClass(Villager.class, new AABB(bellAbs).inflate(VillageDetector.VILLAGER_RADIUS)).forEach(Villager::discard);
         helper.setBlock(BELL, Blocks.BELL);
         helper.runAfterDelay(5, () -> {
             helper.assertTrue(VillageDetector.scan(helper.getLevel(), helper.absolutePos(BELL), 16).isEmpty(), "registered a bell with no villagers");

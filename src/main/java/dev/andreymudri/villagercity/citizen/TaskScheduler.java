@@ -6,6 +6,7 @@ import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageRegistry;
 import java.util.Optional;
 import java.util.Set;
+import javax.annotation.Nullable;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.ai.Brain;
@@ -40,13 +41,14 @@ public final class TaskScheduler {
         Brain<Villager> brain = villager.getBrain();
         Activity cityTask = CitizenAttachments.CITY_TASK.get();
         if (citizen.job() == JobType.NONE || citizen.villageId() == null) {
-            release(level, villager, runtime);
+            VillageData currentVillage = citizen.villageId() != null ? VillageRegistry.get(level).get(citizen.villageId()) : null;
+            release(level, villager, citizen, currentVillage, runtime);
             return;
         }
         VillageData village = VillageRegistry.get(level).get(citizen.villageId());
         if (village == null) {
+            release(level, villager, citizen, null, runtime);
             citizen.clear();
-            release(level, villager, runtime);
             return;
         }
         brain.addActivity(cityTask, ImmutableList.of());
@@ -114,8 +116,12 @@ public final class TaskScheduler {
         }
     }
 
-    private static void release(ServerLevel level, Villager villager, CitizenRuntime runtime) {
-        runtime.current = null;
+    private static void release(ServerLevel level, Villager villager, CitizenData citizen, @Nullable VillageData village, CitizenRuntime runtime) {
+        if (runtime.current != null) {
+            Task current = runtime.current;
+            runtime.current = null;
+            current.stop(new TaskContext(level, villager, village, citizen));
+        }
         runtime.job = null;
         runtime.jobType = null;
         Activity cityTask = CitizenAttachments.CITY_TASK.get();

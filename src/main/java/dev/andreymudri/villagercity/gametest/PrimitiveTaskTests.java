@@ -85,11 +85,11 @@ public final class PrimitiveTaskTests {
         Villager villager = GameTestSupport.spawnVillager(helper, 10, 1, 10);
         ItemStack axe = new ItemStack(Items.STONE_AXE);
         ScriptedJob job = new ScriptedJob(new BreakBlock(helper.absolutePos(log)));
-        long start = helper.getTick();
+        long start = helper.getLevel().getGameTime();
         CitizenTestSupport.enroll(villager, village, JobType.LUMBERJACK, axe, job);
         helper.succeedWhen(() -> {
             assertResults(helper, job, Task.Status.SUCCESS);
-            helper.assertTrue(helper.getTick() - start >= BreakBlock.breakTicks(helper.getLevel(), helper.absolutePos(log), Blocks.OAK_LOG.defaultBlockState(), axe.copy()),
+            helper.assertTrue(job.finishTimes.get(0) - start >= BreakBlock.breakTicks(helper.getLevel(), helper.absolutePos(log), Blocks.OAK_LOG.defaultBlockState(), axe.copy()),
                     "broke too fast");
             helper.assertBlockPresent(Blocks.AIR, log);
             helper.assertEntityPresent(EntityType.ITEM, log, 2.0);

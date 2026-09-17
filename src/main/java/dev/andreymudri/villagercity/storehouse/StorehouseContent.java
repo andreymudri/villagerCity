@@ -28,7 +28,7 @@ public final class StorehouseContent {
     @SubscribeEvent
     public static void onRegister(RegisterEvent event) {
         event.register(Registries.BLOCK, VillagerCity.id("storehouse"),
-                () -> new StorehouseBlock(BlockBehaviour.Properties.ofFullCopy(Blocks.BARREL)));
+                () -> new StorehouseBlock(BlockBehaviour.Properties.ofFullCopy(Blocks.BARREL).explosionResistance(1200.0f)));
         event.register(Registries.ITEM, VillagerCity.id("storehouse"),
                 () -> new BlockItem(BLOCK.get(), new Item.Properties()));
         event.register(Registries.BLOCK_ENTITY_TYPE, VillagerCity.id("storehouse"),
