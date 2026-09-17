@@ -10,4 +10,9 @@ public interface Job {
 
     default void onTaskFinished(TaskContext ctx, Task task, Task.Status status) {
     }
+
+    /** Why the last {@link #plan} returned null, for players asking what the citizen is waiting for; null when unknown. */
+    default @Nullable String waitingFor() {
+        return null;
+    }
 }

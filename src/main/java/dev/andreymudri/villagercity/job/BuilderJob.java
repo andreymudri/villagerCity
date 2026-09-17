@@ -26,9 +26,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.SimpleContainer;
@@ -53,11 +55,21 @@ public final class BuilderJob implements Job {
     public static final double WORK_REACH = 4.0;
     public static final int STAND_ASIDE_DISTANCE = 2;
     public static final double STAND_ASIDE_REACH = 0.9;
+    /** How long a builder waits after finding no buildable plot before searching again. */
+    public static final int PLOT_SEARCH_RETRY_TICKS = 200;
 
     private int consecutiveFailures;
+    private long nextPlotSearch;
+    private @Nullable String waitingFor;
+
+    @Override
+    public @Nullable String waitingFor() {
+        return waitingFor;
+    }
 
     @Override
     public @Nullable Task plan(TaskContext ctx) {
+        waitingFor = null;
         ServerLevel level = ctx.level();
         VillageData village = ctx.village();
         SimpleContainer inventory = ctx.villager().getInventory();
@@ -104,6 +116,7 @@ public final class BuilderJob implements Job {
         Map<Item, Integer> missing = Inventories.missing(Blueprint.materialsFor(unfinished), inventory);
         if (!missing.isEmpty()) {
             if (storehouse == null || !(level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity) || !entity.hasAll(missing)) {
+                waitingFor = storehouse == null ? "a storehouse" : "materials: " + shortfall(level, storehouse, missing);
                 return null;
             }
             return TaskSequence.of(new MoveTo(storehouse, 2.5), new Withdraw(storehouse, missing));
@@ -191,7 +204,16 @@ public final class BuilderJob implements Job {
         return TaskSequence.of(new MoveTo(storehouse, 2.5), new Deposit(storehouse, BuilderJob::isBuildingMaterial));
     }
 
-    private static Optional<Plot> claimPlot(TaskContext ctx) {
+    /** What the storehouse lacks of {@code wanted}, as "item xN" pairs. */
+    private static String shortfall(ServerLevel level, BlockPos storehouse, Map<Item, Integer> wanted) {
+        Map<Item, Integer> have = level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity ? entity.counts() : Map.of();
+        return wanted.entrySet().stream()
+                .filter(entry -> have.getOrDefault(entry.getKey(), 0) < entry.getValue())
+                .map(entry -> BuiltInRegistries.ITEM.getKey(entry.getKey()).getPath() + " x" + (entry.getValue() - have.getOrDefault(entry.getKey(), 0)))
+                .collect(Collectors.joining(", "));
+    }
+
+    private Optional<Plot> claimPlot(TaskContext ctx) {
         ServerLevel level = ctx.level();
         VillageData village = ctx.village();
         BlockPos storehouse = village.storehousePos();
@@ -204,17 +226,31 @@ public final class BuilderJob implements Job {
             VillageRegistry.get(level).setDirty();
             return village.plotBuiltBy(self);
         }
-        if (storehouse == null || !village.plots().isEmpty()) {
+        if (storehouse == null) {
+            waitingFor = "a storehouse";
+            return Optional.empty();
+        }
+        if (!village.plots().isEmpty()) {
+            waitingFor = village.plots().stream().anyMatch(Plot::released) ? "an abandoned plot's retry time" : "another builder's plot to finish";
             return Optional.empty();
         }
         Optional<Blueprint> blueprint = Blueprints.load(level, Blueprints.STARTER_HOUSE);
-        if (blueprint.isEmpty()
-                || !(level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity)
-                || !entity.hasAll(blueprint.get().requiredMaterials())) {
+        if (blueprint.isEmpty() || !(level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity)) {
+            waitingFor = "the storehouse to load";
+            return Optional.empty();
+        }
+        if (!entity.hasAll(blueprint.get().requiredMaterials())) {
+            waitingFor = "materials: " + shortfall(level, storehouse, blueprint.get().requiredMaterials());
+            return Optional.empty();
+        }
+        if (level.getGameTime() < nextPlotSearch) {
+            waitingFor = "a buildable plot near the bell";
             return Optional.empty();
         }
         Optional<BlockPos> origin = PlotPlanner.find(level, village, blueprint.get().size());
         if (origin.isEmpty()) {
+            nextPlotSearch = level.getGameTime() + PLOT_SEARCH_RETRY_TICKS;
+            waitingFor = "a buildable plot near the bell";
             return Optional.empty();
         }
         Plot plot = new Plot(UUID.randomUUID(), blueprint.get().id().toString(), origin.get(), blueprint.get().size(), ctx.villager().getUUID());

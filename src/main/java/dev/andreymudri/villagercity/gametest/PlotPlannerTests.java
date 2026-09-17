@@ -47,6 +47,38 @@ public final class PlotPlannerTests {
     }
 
     @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void findsGroundWellBelowARaisedBell(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // A bell on a hill 11 blocks above the village's flat ground, the hill filling the middle of the area.
+        for (int x = 14; x <= 34; x++) {
+            for (int z = 14; z <= 34; z++) {
+                for (int y = 1; y <= 11; y++) {
+                    helper.setBlock(x, y, z, Blocks.DIRT_PATH);
+                }
+            }
+        }
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(24, 12, 24)), 4);
+        BlockPos origin = PlotPlanner.find(helper.getLevel(), village, HOUSE).orElseThrow(() -> new AssertionError("no plot found below the raised bell"));
+        helper.assertTrue(relative(helper, origin).getY() == 1, "plot should sit on the low ground, got " + relative(helper, origin));
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void ignoresGroundTooFarBelowTheBell(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 14; x <= 34; x++) {
+            for (int z = 14; z <= 34; z++) {
+                for (int y = 1; y <= PlotPlanner.MAX_VERTICAL + 1; y++) {
+                    helper.setBlock(x, y, z, Blocks.DIRT_PATH);
+                }
+            }
+        }
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(24, PlotPlanner.MAX_VERTICAL + 2, 24)), 4);
+        helper.assertTrue(PlotPlanner.find(helper.getLevel(), village, HOUSE).isEmpty(), "plot found more than " + PlotPlanner.MAX_VERTICAL + " blocks below the bell");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
     public static void avoidsWater(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {

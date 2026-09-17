@@ -2,7 +2,10 @@ package dev.andreymudri.villagercity.command;
 
 import dev.andreymudri.villagercity.VillagerCity;
 import dev.andreymudri.villagercity.citizen.CitizenAttachments;
+import dev.andreymudri.villagercity.citizen.CitizenRuntime;
+import dev.andreymudri.villagercity.citizen.Job;
 import dev.andreymudri.villagercity.citizen.Task;
+import dev.andreymudri.villagercity.citizen.TaskScheduler;
 import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageRegistry;
@@ -69,12 +72,25 @@ public final class VillageCommand {
             villager.getExistingData(CitizenAttachments.CITIZEN.get())
                     .filter(data -> village.id().equals(data.villageId()))
                     .ifPresent(data -> {
-                        Task task = villager.getData(CitizenAttachments.RUNTIME).currentTask();
-                        lines.add("citizen " + villager.getUUID() + " job=" + data.job().getSerializedName()
-                                + " task=" + (task == null ? "idle" : task.getClass().getSimpleName()));
+                        CitizenRuntime runtime = villager.getData(CitizenAttachments.RUNTIME);
+                        lines.add("citizen " + villager.getUUID() + " job=" + data.job().getSerializedName() + " task=" + taskText(level, villager, runtime));
                     });
         }
         return lines;
+    }
+
+    /** The running task, "resting" when the villager's schedule or state pauses city work, or idle with what it waits for. */
+    private static String taskText(ServerLevel level, Villager villager, CitizenRuntime runtime) {
+        if (TaskScheduler.shouldYield(level, villager)) {
+            return "resting";
+        }
+        Task task = runtime.currentTask();
+        if (task != null) {
+            return task.getClass().getSimpleName();
+        }
+        Job job = runtime.activeJob();
+        String waiting = job == null ? null : job.waitingFor();
+        return waiting == null ? "idle" : "idle (waiting for " + waiting + ")";
     }
 
     private static String format(Map<Item, Integer> counts) {
