@@ -20,9 +20,10 @@ import java.util.Map;
 import java.util.UUID;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
-import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Item;
@@ -129,7 +130,42 @@ public final class VillageCommandTests {
         helper.assertTrue(text.contains("houses: 0"), "missing house count:\n" + text);
         helper.assertTrue(text.contains("oak_log x5"), "missing storehouse contents:\n" + text);
         helper.assertTrue(text.contains("job=builder") && text.contains("task=idle"), "missing citizen:\n" + text);
+        helper.assertTrue(text.contains("paths: 0 cells laid, 0 queued"), "missing paths:\n" + text);
+        helper.assertTrue(text.contains("workshop: table none, furnace none"), "missing workshop:\n" + text);
+        helper.assertTrue(text.contains("dark spots: 0"), "missing dark spots:\n" + text);
+        helper.assertTrue(!text.contains("artisan orders:"), "listed artisan orders with none placed:\n" + text);
         VillageTestSupport.remove(helper, village);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_works")
+    public static void describeListsPlotPreparationPathsWorkshopAndLighting(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 4, false);
+        BlockPos preparedOrigin = helper.absolutePos(new BlockPos(30, 1, 30));
+        BlockPos unpreparedOrigin = helper.absolutePos(new BlockPos(4, 1, 30));
+        village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", preparedOrigin, new Vec3i(5, 5, 5), null, 0L, 0));
+        village.addPlot(new Plot(UUID.randomUUID(), "villagercity:blueprint/starter_house", unpreparedOrigin, new Vec3i(5, 5, 5), null, 0L, 0, false));
+        village.addPathCell(helper.absolutePos(new BlockPos(22, 2, 24)));
+        village.addPathCell(helper.absolutePos(new BlockPos(21, 2, 24)));
+        village.queuePath(helper.absolutePos(new BlockPos(4, 1, 4)));
+        BlockPos table = helper.absolutePos(new BlockPos(18, 1, 22));
+        BlockPos furnace = helper.absolutePos(new BlockPos(18, 1, 26));
+        village.setCraftingTablePos(table);
+        village.setFurnacePos(furnace);
+        village.setDarkSpotCount(7);
+        village.setArtisanOrders(List.of("torch x4", "oak_planks x12"));
+
+        String text = String.join("\n", VillageCommand.describe(helper.getLevel(), village));
+        VillageTestSupport.remove(helper, village);
+        helper.assertTrue(text.lines().anyMatch(line -> line.startsWith("plot " + preparedOrigin.toShortString() + " ") && line.endsWith(", prepared")),
+                "missing prepared plot:\n" + text);
+        helper.assertTrue(text.lines().anyMatch(line -> line.startsWith("plot " + unpreparedOrigin.toShortString() + " ") && line.endsWith(", unprepared")),
+                "missing unprepared plot:\n" + text);
+        helper.assertTrue(text.contains("paths: 2 cells laid, 1 queued"), "missing paths:\n" + text);
+        helper.assertTrue(text.contains("workshop: table " + table.toShortString() + ", furnace " + furnace.toShortString()), "missing workshop:\n" + text);
+        helper.assertTrue(text.contains("dark spots: 7"), "missing dark spots:\n" + text);
+        helper.assertTrue(text.contains("artisan orders: torch x4, oak_planks x12"), "missing artisan orders:\n" + text);
         helper.succeed();
     }
 

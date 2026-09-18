@@ -1,6 +1,7 @@
 package dev.andreymudri.villagercity.village;
 
 import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.craft.WorkshopService;
 import dev.andreymudri.villagercity.storehouse.StorehouseService;
 import java.util.List;
 import net.minecraft.server.level.ServerLevel;
@@ -36,6 +37,7 @@ public final class VillageTicker {
             return;
         }
         StorehouseService.ensureStorehouse(level, village);
+        WorkshopService.ensureWorkshop(level, village);
         JobAssignment.assign(level, village);
     }
 }

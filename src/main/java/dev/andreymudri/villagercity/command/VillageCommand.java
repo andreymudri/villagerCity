@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import javax.annotation.Nullable;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
@@ -180,6 +181,12 @@ public final class VillageCommand {
         for (Plot plot : village.plots()) {
             lines.add(plotText(level, plot));
         }
+        lines.add("paths: " + village.pathCells().size() + " cells laid, " + village.pathQueue().size() + " queued");
+        lines.add("workshop: table " + posText(village.craftingTablePos()) + ", furnace " + posText(village.furnacePos()));
+        lines.add("dark spots: " + village.darkSpotCount());
+        if (!village.artisanOrders().isEmpty()) {
+            lines.add("artisan orders: " + String.join(", ", village.artisanOrders()));
+        }
         BlockPos storehouse = village.storehousePos();
         if (storehouse == null) {
             lines.add("storehouse: none");
@@ -233,7 +240,14 @@ public final class VillageCommand {
         return waiting == null ? "idle" : "idle (waiting for " + waiting + ")";
     }
 
-    /** Where the plot is, who builds it, how many blueprint blocks are left, and a released plot's abandons and retry time. */
+    private static String posText(@Nullable BlockPos pos) {
+        return pos == null ? "none" : pos.toShortString();
+    }
+
+    /**
+     * Where the plot is, who builds it, how many blueprint blocks are left, a released plot's abandons and retry time,
+     * and whether its ground is prepared.
+     */
     private static String plotText(ServerLevel level, Plot plot) {
         StringBuilder line = new StringBuilder("plot " + plot.origin().toShortString() + " " + plot.blueprint());
         Blueprints.load(level, ResourceLocation.parse(plot.blueprint())).ifPresent(blueprint -> {
@@ -249,6 +263,7 @@ public final class VillageCommand {
         if (plot.abandons() > 0) {
             line.append(", abandoned ").append(plot.abandons()).append('/').append(BuilderJob.MAX_ABANDONS);
         }
+        line.append(plot.prepared() ? ", prepared" : ", unprepared");
         return line.toString();
     }
 

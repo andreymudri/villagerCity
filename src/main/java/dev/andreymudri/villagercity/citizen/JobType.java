@@ -6,7 +6,10 @@ import net.minecraft.util.StringRepresentable;
 public enum JobType implements StringRepresentable {
     NONE("none"),
     LUMBERJACK("lumberjack"),
-    BUILDER("builder");
+    BUILDER("builder"),
+    ARTISAN("artisan"),
+    PAVER("paver"),
+    LAMPLIGHTER("lamplighter");
 
     public static final Codec<JobType> CODEC = StringRepresentable.fromEnum(JobType::values);
 
