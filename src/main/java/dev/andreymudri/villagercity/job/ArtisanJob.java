@@ -25,6 +25,9 @@ import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.entity.schedule.Activity;
+import net.minecraft.world.entity.schedule.Schedule;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.Mth;
@@ -45,8 +48,16 @@ public final class ArtisanJob implements Job {
     public static final double WORK_REACH = 2.5;
     /** Fuels the artisan will burn, best first on a tie: the two coals, then any log, then any plank. */
     public static final List<TagKey<Item>> FUEL_TAGS = List.of(ItemTags.LOGS, ItemTags.PLANKS);
-    /** Furnace slots by index, for messages a player reads. */
-    private static final String[] SLOT_NAMES = {"input", "fuel", "result"};
+    /**
+     * Most items one smelting trip may take on. A batch is the village's exposure while it is in a shared furnace, so
+     * it is kept small: whatever else goes wrong, an interrupted batch strands at most this much.
+     */
+    public static final int MAX_SMELT_BATCH = 8;
+    /** Slack on top of a batch's smelting time for walking there and back before the villager is due to rest. */
+    public static final int TRAVEL_ALLOWANCE_TICKS = 400;
+    /** How finely the villager's schedule is sampled when looking ahead for its rest. */
+    private static final int REST_SCAN_STEP = 10;
+    private static final int DAY_TICKS = 24000;
 
     private @Nullable String waitingFor;
 
@@ -84,11 +95,13 @@ public final class ArtisanJob implements Job {
                 waitingFor = "a furnace by the storehouse";
                 return null;
             }
-            claimBlocked = SmeltInFurnace.coveredBy(entity, claim);
-            if (claimBlocked == null) {
+            String foreign = SmeltInFurnace.foreignIn(entity, claim);
+            if (foreign == null) {
                 return resume(storehousePos, storehouse, furnace, entity, claim);
             }
-            claimBlocked = occupied(furnace, claimBlocked);
+            // The furnace holds more than this receipt covers, so none of it can be told from a player's. The village
+            // says which slot and what is in it and gets on with other orders until somebody clears it.
+            claimBlocked = occupied(furnace, foreign);
         }
         VillageDemand.Demand demand = VillageDemand.of(level, village, storehouse);
         CraftPlanner.Result result = CraftPlanner.plan(level.getRecipeManager(), level.registryAccess(),
@@ -115,6 +128,9 @@ public final class ArtisanJob implements Job {
                 continue;
             }
             String why = furnaceBlockedBy(level, furnace, step);
+            if (why == null) {
+                why = tooLateToSmelt(level, ctx.villager(), step.times());
+            }
             Task smelting = why == null ? smelt(level, storehousePos, storehouse, furnace, step, demand) : null;
             if (smelting != null) {
                 return smelting;
@@ -152,10 +168,35 @@ public final class ArtisanJob implements Job {
         for (int slot : new int[] {SmeltInFurnace.SLOT_INPUT, SmeltInFurnace.SLOT_FUEL, SmeltInFurnace.SLOT_RESULT}) {
             ItemStack held = entity.getItem(slot);
             if (!held.isEmpty()) {
-                return occupied(furnace, SLOT_NAMES[slot] + " slot holding " + path(held.getItem()));
+                return occupied(furnace, SmeltInFurnace.SLOT_NAMES[slot] + " slot holding " + path(held.getItem()));
             }
         }
         return null;
+    }
+
+    /**
+     * Why this batch should not be started now, or null when there is day enough for it. A batch left half-done in a
+     * shared furnace is the whole problem this class works to recover from, and a villager that walks off to bed
+     * mid-smelt leaves exactly that. Sitting the batch out until morning costs the village one idle evening.
+     */
+    private static @Nullable String tooLateToSmelt(ServerLevel level, Villager villager, int items) {
+        int needed = items * SmeltInFurnace.TICKS_PER_ITEM + SmeltInFurnace.EXTRA_TICKS + TRAVEL_ALLOWANCE_TICKS;
+        return ticksUntilRest(level, villager) >= needed ? null : "daylight enough to finish a batch in the furnace";
+    }
+
+    /**
+     * How long until this villager's own schedule sends it to rest, a whole day when it never does (a GameTest
+     * villager with an empty schedule, or one whose day holds no rest at all).
+     */
+    public static int ticksUntilRest(ServerLevel level, Villager villager) {
+        Schedule schedule = villager.getBrain().getSchedule();
+        int now = (int) (level.getDayTime() % DAY_TICKS);
+        for (int ahead = 0; ahead <= DAY_TICKS; ahead += REST_SCAN_STEP) {
+            if (schedule.getActivityAt((now + ahead) % DAY_TICKS) == Activity.REST) {
+                return ahead;
+            }
+        }
+        return DAY_TICKS;
     }
 
     /** Names the furnace, the slot and the item, so {@code /villagercity village} tells a player what to take out. */
@@ -286,6 +327,9 @@ public final class ArtisanJob implements Job {
     private static CraftStep trimmed(CraftStep step) {
         int perRun = Math.max(1, step.outputCount() / Math.max(1, step.times()));
         int maxRuns = Math.max(1, new ItemStack(step.output()).getMaxStackSize() / perRun);
+        if (step.kind() == CraftStep.Kind.SMELT) {
+            maxRuns = Math.min(maxRuns, MAX_SMELT_BATCH);
+        }
         int times = Math.min(step.times(), maxRuns);
         if (times == step.times()) {
             return step;
