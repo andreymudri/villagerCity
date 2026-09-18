@@ -57,6 +57,10 @@ public final class PathRoute {
         }
     }
 
+    /** Where the search actually begins: {@code start} itself, or the first of its neighbours that can be used instead. */
+    private record StartPoint(BlockPos pos, Kind kind) {
+    }
+
     private static final class Node {
         final State state;
         final int g;
@@ -76,19 +80,18 @@ public final class PathRoute {
     private PathRoute() {
     }
 
-    /** Finds a buildable route from {@code start} to within {@link #GOAL_RADIUS} blocks of {@code goal} (or onto an existing path). */
+    /** Finds a buildable route from {@code start} (or a neighbour of it, see {@link #resolveStart}) to within
+     * {@link #GOAL_RADIUS} blocks of {@code goal} (or onto an existing path). */
     public static Optional<List<Cell>> find(ServerLevel level, VillageData village, BlockPos start, BlockPos goal) {
-        Ground startGround = groundAt(level, start.getX(), start.getZ());
-        if (!startGround.present()) {
-            return Optional.empty();
-        }
-        if (blocked(level, start) || blocked(level, start.above()) || supportBlocked(level, start.below())) {
-            return Optional.empty();
-        }
         List<Footprint> occupied = village.occupiedFootprints();
-        Set<Long> ownPrefix = ownPrefixColumns(village, start);
-        State startState = new State(start.getX(), start.getZ(), start.getY());
-        Node startNode = new Node(startState, 0, kindOf(start.getY(), startGround), 0, null);
+        Optional<StartPoint> resolvedStart = resolveStart(level, occupied, start);
+        if (resolvedStart.isEmpty()) {
+            return Optional.empty();
+        }
+        BlockPos routeStart = resolvedStart.get().pos();
+        Set<Long> ownPrefix = ownPrefixColumns(village, routeStart);
+        State startState = new State(routeStart.getX(), routeStart.getZ(), routeStart.getY());
+        Node startNode = new Node(startState, 0, resolvedStart.get().kind(), 0, null);
 
         PriorityQueue<Node> open = new PriorityQueue<>(Comparator.comparingInt(n -> n.g + heuristic(n.state, goal)));
         Map<State, Integer> bestG = new HashMap<>();
@@ -114,7 +117,7 @@ public final class PathRoute {
             for (Direction direction : Direction.Plane.HORIZONTAL) {
                 int nx = node.state.x() + direction.getStepX();
                 int nz = node.state.z() + direction.getStepZ();
-                if (!(nx == start.getX() && nz == start.getZ()) && insideAny(occupied, nx, nz)) {
+                if (!(nx == routeStart.getX() && nz == routeStart.getZ()) && insideAny(occupied, nx, nz)) {
                     continue;
                 }
                 Ground ground = groundAt(level, nx, nz);
@@ -125,12 +128,19 @@ public final class PathRoute {
                 int maxH = Math.min(node.state.h() + 1, ground.y() + MAX_ABOVE_GROUND);
                 for (int h = minH; h <= maxH; h++) {
                     BlockPos surface = new BlockPos(nx, h, nz);
-                    if (blocked(level, surface) || blocked(level, surface.above()) || supportBlocked(level, surface.below())) {
+                    boolean bridge = ground.fluid() || h - ground.y() > MAX_ABOVE_GROUND;
+                    Kind kind = bridge ? Kind.BRIDGE : kindOf(h, ground);
+                    if (blocked(level, surface) || blocked(level, surface.above())) {
                         continue;
                     }
-                    boolean bridge = ground.fluid() || h - ground.y() > MAX_ABOVE_GROUND;
+                    // GROUND cells stand right on top of whatever the column's topmost solid block already is,
+                    // untouched either way (see planCell): a foreign one (a player's cobblestone terrace, say) is a
+                    // perfectly fine surface to cross, so only RAISED/CUT/BRIDGE - which do place or dig at the
+                    // support - need it to be paveable rather than a foreign obstruction (see supportBlocked).
+                    if (kind != Kind.GROUND && supportBlocked(level, surface.below())) {
+                        continue;
+                    }
                     int cost = 1 + 2 * Math.abs(h - ground.y()) + (bridge ? 3 : 0);
-                    Kind kind = bridge ? Kind.BRIDGE : kindOf(h, ground);
                     State next = new State(nx, nz, h);
                     int g = node.g + cost;
                     if (g < bestG.getOrDefault(next, Integer.MAX_VALUE)) {
@@ -206,6 +216,40 @@ public final class PathRoute {
         return false;
     }
 
+    /**
+     * {@code start} itself, if it can be stood on, or else the first of its horizontal neighbours (at the same
+     * height) that can. {@code start} is exactly the cell {@code doorOutside} returns and a route can never detour
+     * around it the way it can any other cell: without a fallback, one foreign block under the doorstep (a player's
+     * cobblestone step, say, with the same {@code groundAt} height as the rest of the flat ground around it) would
+     * refuse the whole route outright, permanently losing the house's path to the bell. A GROUND-kind start (see the
+     * neighbour loop in {@link #find}) is fine to stand on regardless of what its support is made of.
+     */
+    private static Optional<StartPoint> resolveStart(ServerLevel level, List<Footprint> occupied, BlockPos start) {
+        List<BlockPos> candidates = new ArrayList<>();
+        candidates.add(start);
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            candidates.add(start.relative(direction));
+        }
+        for (BlockPos candidate : candidates) {
+            if (!candidate.equals(start) && insideAny(occupied, candidate.getX(), candidate.getZ())) {
+                continue;
+            }
+            Ground ground = groundAt(level, candidate.getX(), candidate.getZ());
+            if (!ground.present()) {
+                continue;
+            }
+            if (blocked(level, candidate) || blocked(level, candidate.above())) {
+                continue;
+            }
+            Kind kind = kindOf(candidate.getY(), ground);
+            if (kind != Kind.GROUND && supportBlocked(level, candidate.below())) {
+                continue;
+            }
+            return Optional.of(new StartPoint(candidate, kind));
+        }
+        return Optional.empty();
+    }
+
     /** A cell blocks the route unless it is open (air, replaceable vegetation) or natural ground the paver can dig. */
     private static boolean blocked(ServerLevel level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
@@ -213,12 +257,14 @@ public final class PathRoute {
     }
 
     /**
-     * A cell's support blocks the route only if it is a foreign object: not open ground a RAISED or BRIDGE cell
-     * would place its own support into, not what building has already put there (dirt still to pave, a finished
-     * dirt path, or a bridge's oak planks), and not natural ground a CUT simply leaves exposed. Without this, a
-     * block dropped on a support cell after its route was cached (a player's block, say) has the same {@code
-     * groundAt} height and passes every other check, so a route recomputed around it lands right back on it and
-     * {@code planCell} is asked to build over something it never should.
+     * A RAISED, CUT or BRIDGE cell's support blocks the route only if it is a foreign object: not open ground a
+     * RAISED or BRIDGE cell would place its own support into, not what building has already put there (dirt still
+     * to pave, a finished dirt path, or a bridge's oak planks), and not natural ground a CUT simply leaves exposed.
+     * Without this, a block dropped on a support cell after its route was cached (a player's block, say) has the
+     * same {@code groundAt} height and passes every other check, so a route recomputed around it lands right back
+     * on it and {@code planCell} is asked to build over something it never should. Never called for a GROUND cell
+     * (see {@link #find} and {@link #resolveStart}): a GROUND cell's support is never touched either way, so a
+     * foreign one there is simply a fine surface to cross, not something to detour around or bury under new dirt.
      */
     private static boolean supportBlocked(ServerLevel level, BlockPos support) {
         BlockState state = level.getBlockState(support);

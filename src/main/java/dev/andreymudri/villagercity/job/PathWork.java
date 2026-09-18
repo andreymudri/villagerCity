@@ -19,23 +19,25 @@ import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageRegistry;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.world.SimpleContainer;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.DoorBlock;
 import net.minecraft.world.level.block.state.BlockState;
@@ -43,6 +45,8 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 /**
  * The paver's path work: finds a route ({@link PathRoute}) from each queued house's door to the bell and lays it one
@@ -63,13 +67,83 @@ public final class PathWork implements Job {
     /** How far (horizontally) a villager steps aside when it is standing where a support block must go. */
     public static final int STAND_ASIDE_DISTANCE = 2;
     public static final double STAND_ASIDE_REACH = 0.9;
-    /** How far the paver must walk from a door it opened before {@link #closeDistantDoors} shuts it again. */
+    /** How far a villager must walk from a door it opened before the sweep below shuts it again. */
     public static final double DOOR_CLOSE_DISTANCE = 6.0;
+    /** Shuts a door this mod opened even if its opener never came within {@link #DOOR_CLOSE_DISTANCE} of it (its
+     * route changed, say, right after opening it): a safety net, generous enough that it never fires while the
+     * opener is still plausibly on its way there for the first time. */
+    public static final int DOOR_OPEN_TIMEOUT_TICKS = 400;
+
+    /**
+     * Doors opened by any paver, anywhere, closed again once their opener has walked clear (or never came, or is
+     * simply gone). Deliberately not a field on a {@link PathWork} instance (as it was before this became a bug in
+     * its own right): a job instance only ever runs code while {@link TaskScheduler} keeps ticking it, which it
+     * stops doing the moment the villager sleeps or takes up any other yielding activity, is released or discarded,
+     * or is simply handed a different job - none of which give a job any chance to clean up after itself (the
+     * {@code Job} contract only ever promises {@link #plan} and {@link #onTaskFinished}, called on a schedule this
+     * class does not control). Tracked here instead, swept by a level-tick listener that owes nothing to any one
+     * villager's own ticking, a door this mod opens is shut again on the first level tick where it no longer needs
+     * to be, whether or not the paver, its job, or its task instance still exist to ask for that. Never persisted:
+     * a restart loses this exactly like the routes and failure counts above, and a door left open across one is a
+     * player's or another mod's problem to notice, not a state this job need survive to fix.
+     */
+    private static final Map<OpenDoor, DoorState> OPEN_DOORS = new ConcurrentHashMap<>();
+
+    static {
+        NeoForge.EVENT_BUS.addListener((LevelTickEvent.Post event) -> {
+            if (OPEN_DOORS.isEmpty() || !(event.getLevel() instanceof ServerLevel level)) {
+                return;
+            }
+            for (Map.Entry<OpenDoor, DoorState> entry : OPEN_DOORS.entrySet()) {
+                if (entry.getKey().dimension().equals(level.dimension())) {
+                    closeIfClear(level, entry.getKey(), entry.getValue());
+                }
+            }
+        });
+    }
+
+    /** One door this mod opened: where, in which dimension, and which villager opened it (to measure distance by). */
+    private record OpenDoor(BlockPos pos, ResourceKey<Level> dimension, UUID villager) {
+    }
+
+    /** {@code everNear} once the opener has been seen within {@link #DOOR_CLOSE_DISTANCE}: only from then on does
+     * leaving that range again mean "done with it, close it" rather than "still on its way there". */
+    private static final class DoorState {
+        final long openedAtTick;
+        boolean everNear;
+
+        DoorState(long openedAtTick) {
+            this.openedAtTick = openedAtTick;
+        }
+    }
+
+    /**
+     * Shuts {@code door} unless its opener is still alive, and either currently within {@link #DOOR_CLOSE_DISTANCE}
+     * of it or has not yet had time to walk there for the first time (see {@link #DOOR_OPEN_TIMEOUT_TICKS}): opened
+     * right as a fresh route is computed, the door is typically still far from its opener, who has not moved yet,
+     * so closing on distance alone the moment it is opened would shut it again before the paver ever reaches it.
+     */
+    private static void closeIfClear(ServerLevel level, OpenDoor door, DoorState state) {
+        Entity owner = level.getEntity(door.villager());
+        boolean near = owner instanceof Villager villager && villager.isAlive()
+                && villager.distanceToSqr(Vec3.atCenterOf(door.pos())) < DOOR_CLOSE_DISTANCE * DOOR_CLOSE_DISTANCE;
+        if (near) {
+            state.everNear = true;
+            return;
+        }
+        if (owner instanceof Villager villager && villager.isAlive() && !state.everNear
+                && level.getGameTime() - state.openedAtTick < DOOR_OPEN_TIMEOUT_TICKS) {
+            return;
+        }
+        BlockState blockState = level.getBlockState(door.pos());
+        if (blockState.getBlock() instanceof DoorBlock doorBlock && doorBlock.isOpen(blockState)) {
+            doorBlock.setOpen(owner instanceof Villager villager ? villager : null, level, blockState, door.pos(), false);
+        }
+        OPEN_DOORS.remove(door);
+    }
 
     private final Map<BlockPos, List<PathRoute.Cell>> routes = new HashMap<>();
     private final Map<BlockPos, Integer> failures = new HashMap<>();
-    /** Doors this job opened itself, closed again once the paver has walked well clear of them. */
-    private final Set<BlockPos> openedDoors = new HashSet<>();
     private @Nullable BlockPos current;
     private boolean building;
     private @Nullable String waitingFor;
@@ -86,7 +160,6 @@ public final class PathWork implements Job {
         current = null;
         ServerLevel level = ctx.level();
         VillageData village = ctx.village();
-        closeDistantDoors(ctx);
         List<BlockPos> queue = village.pathQueue();
         if (queue.isEmpty()) {
             return null;
@@ -104,8 +177,15 @@ public final class PathWork implements Job {
             Optional<List<PathRoute.Cell>> found = doorOutside(ctx, house.get())
                     .flatMap(start -> PathRoute.find(level, village, start, village.center()));
             if (found.isEmpty()) {
-                VillagerCity.LOGGER.info("no route from the house at {} to the bell", origin);
+                // Not removeQueuedPath without requeuing: whatever blocks the route today (a wall the player has
+                // not built yet, a door not placed until worldgen finishes loading, ...) may not tomorrow, and
+                // dropping the house here would lose its path to the bell forever, with nothing left to ever queue
+                // it again (queuePath is reached only from addHouse, load, and the MAX_CONSECUTIVE_FAILURES retry
+                // below). Moving it to the back, the same way a house stuck on a build failure is moved, gives it
+                // another try later without letting an unbuildable house starve every other house behind it.
+                VillagerCity.LOGGER.info("no route yet from the house at {} to the bell; retrying later", origin);
                 village.removeQueuedPath(origin);
+                village.queuePath(origin);
                 failures.remove(origin);
                 return null;
             }
@@ -303,14 +383,17 @@ public final class PathWork implements Job {
      * The cell just outside the house's own footprint, next to its lower door half at {@code origin.y + 1}. Opens
      * the door if it is shut: our task-based navigation drives {@link net.minecraft.world.entity.ai.navigation.PathNavigation}
      * directly, without the brain memory ({@code MemoryModuleType.PATH}) that vanilla's own door-opening behaviour
-     * ({@code InteractWithDoor}) needs, so a shut door in the route is never opened on its own and blocks the paver.
-     * Never opens a door the villager could not open itself (an iron door, say): the house's path is skipped instead,
-     * with a logged reason, the same way a house with no route to the bell is. When {@link WorldPermissions#mayGrief}
-     * refuses, the door is left shut but the start position is still returned: the route itself never runs through
-     * the door (only alongside it), so the paver can still lay a path without ever opening it. A door this method
-     * does open is recorded in {@link #openedDoors} and shut again by {@link #closeDistantDoors}.
+     * ({@code InteractWithDoor}) needs, and (unlike a mob that opens doors itself) a shut door near the route can
+     * also make vanilla path node evaluation refuse to route anywhere nearby at all, not merely through the door's
+     * own tile, so leaving it shut can leave the paver unable to reach cells the route never actually crosses it to
+     * get to. Never opens a door the villager could not open itself (an iron door, say): the house's path is skipped
+     * instead, with a logged reason, the same way a house with no route to the bell is. When {@link
+     * WorldPermissions#mayGrief} refuses, the door is left shut but the start position is still returned: the route
+     * itself never runs through the door (only alongside it), so the paver can still lay a path without ever
+     * opening it, just possibly a longer one than if it could. A door this method does open is recorded in {@link
+     * #OPEN_DOORS} and shut again from there, not from anything this job instance does afterwards.
      */
-    private Optional<BlockPos> doorOutside(TaskContext ctx, BuildingRecord house) {
+    private static Optional<BlockPos> doorOutside(TaskContext ctx, BuildingRecord house) {
         ServerLevel level = ctx.level();
         Villager villager = ctx.villager();
         Footprint footprint = house.footprint();
@@ -329,7 +412,8 @@ public final class PathWork implements Job {
                         }
                         if (WorldPermissions.mayGrief(level, villager)) {
                             doorBlock.setOpen(villager, level, state, pos, true);
-                            openedDoors.add(pos.immutable());
+                            OPEN_DOORS.put(new OpenDoor(pos.immutable(), level.dimension(), villager.getUUID()),
+                                    new DoorState(level.getGameTime()));
                         }
                     }
                     Direction facing = state.getValue(DoorBlock.FACING);
@@ -340,27 +424,6 @@ public final class PathWork implements Job {
             }
         }
         return Optional.empty();
-    }
-
-    /** Shuts every door this job opened, once the paver has walked {@link #DOOR_CLOSE_DISTANCE} clear of it. */
-    private void closeDistantDoors(TaskContext ctx) {
-        if (openedDoors.isEmpty()) {
-            return;
-        }
-        ServerLevel level = ctx.level();
-        Villager villager = ctx.villager();
-        Iterator<BlockPos> it = openedDoors.iterator();
-        while (it.hasNext()) {
-            BlockPos pos = it.next();
-            if (villager.distanceToSqr(Vec3.atCenterOf(pos)) < DOOR_CLOSE_DISTANCE * DOOR_CLOSE_DISTANCE) {
-                continue;
-            }
-            BlockState state = level.getBlockState(pos);
-            if (state.getBlock() instanceof DoorBlock doorBlock && doorBlock.isOpen(state) && WorldPermissions.mayGrief(level, villager)) {
-                doorBlock.setOpen(villager, level, state, pos, false);
-            }
-            it.remove();
-        }
     }
 
     /**

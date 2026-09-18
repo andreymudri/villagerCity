@@ -209,7 +209,7 @@ public final class PathTests {
     }
 
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_no_route", timeoutTicks = 4000)
-    public static void skipsWhenThereIsNoRoute(GameTestHelper helper) {
+    public static void retriesInsteadOfAbandoningWhenThereIsNoRouteYet(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         BlockPos bellRelative = new BlockPos(24, 1, 24);
         VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
@@ -221,10 +221,13 @@ public final class PathTests {
             }
         }
         stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
-        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        BuildingRecord house = placeStarterHouse(helper, village, HOUSE_ORIGIN);
         enrollPaver(helper, village, 12, 1, 20);
         helper.runAfterDelay(3000, () -> {
-            helper.assertTrue(village.pathQueue().isEmpty(), "path never abandoned");
+            // Never removeQueuedPath without requeuing it: a house whose route cannot be built right now (the bell
+            // walled off entirely, here) keeps its place in the queue for a later retry instead of losing its path
+            // to the bell forever, with nothing left anywhere that would ever queue it again.
+            helper.assertTrue(village.pathQueue().contains(house.origin()), "house was dropped from the queue instead of retried");
             helper.assertTrue(village.pathCells().isEmpty(), "path cells laid despite no route");
             boolean anyPath = false;
             for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
@@ -356,7 +359,7 @@ public final class PathTests {
     }
 
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_makepath_approach", timeoutTicks = 6000)
-    public static void neverPavesOverABlockPlacedDuringTheApproach(GameTestHelper helper) {
+    public static void crossesAtGroundLevelABlockPlacedDuringTheApproachWithoutBuryingIt(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         BlockPos bellRelative = new BlockPos(24, 1, 24);
         VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
@@ -400,19 +403,19 @@ public final class PathTests {
         });
         helper.succeedWhen(() -> {
             helper.assertTrue(placed.get(), "diamond block was never placed during the paver's approach");
-            // Wait for the very task instance that was walking toward the obstructed cell to finish (success or
-            // failure): checking survival any earlier would trivially pass while the paver has not reached it yet.
+            // Wait for the very task instance that was walking toward the cell to finish (success or failure):
+            // checking survival any earlier would trivially pass while the paver has not reached it yet.
             helper.assertTrue(villager.getData(CitizenAttachments.RUNTIME).currentTask() != approachTask.get(),
-                    "the paver has not yet finished approaching the obstructed cell");
-            // Gate on the whole path being finished before judging the "never recorded" invariant, the same way
-            // obstructedCellIsNeverRecordedAsPath does: checked any earlier, the obstructed cell passes for exactly
-            // one tick between the route being dropped and the recomputed route reaching (and correctly skipping)
-            // it, which made the assertion below pass on that single tick for the wrong reason.
+                    "the paver has not yet finished approaching the cell");
             helper.assertTrue(village.pathQueue().isEmpty(), "path still queued");
             helper.assertTrue(reachedBell(village, bell), "path never reaches within 2 of the bell");
             BlockPos support = supportPos.get();
+            // A diamond block is exactly as solid and walkable as the grass_block it replaced: at ground level (the
+            // only kind of cell this whole flat area ever produces), a foreign block like it is already a fine
+            // surface to cross, left alone rather than buried under new dirt or detoured around (see supportBlocked
+            // in PathRoute, and the guard in its neighbour loop that only applies it to RAISED/CUT/BRIDGE cells).
             helper.assertTrue(level.getBlockState(support).is(Blocks.DIAMOND_BLOCK), "block placed during the approach was paved over");
-            helper.assertFalse(village.pathCells().contains(support.above()), "the obstructed cell was recorded as a laid path cell");
+            helper.assertTrue(village.pathCells().contains(support.above()), "the cell over the diamond block was never recorded as a laid path cell");
             VillageTestSupport.remove(helper, village);
         });
     }
@@ -534,7 +537,7 @@ public final class PathTests {
         BlockPos bellRelative = new BlockPos(24, 1, 24);
         VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
         stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
-        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        BuildingRecord house = placeStarterHouse(helper, village, HOUSE_ORIGIN);
         // Swap the starter house's own oak door for an iron one, same facing/half/hinge: no vanilla mob (and this
         // paver, driving navigation directly rather than through InteractWithDoor) can open it, so the house's path
         // must be skipped instead of the door being forced open.
@@ -542,7 +545,9 @@ public final class PathTests {
         helper.setBlock(DOOR_UPPER, ironDoorLike(helper.getBlockState(DOOR_UPPER)));
         enrollPaver(helper, village, 12, 1, 20);
         helper.runAfterDelay(3000, () -> {
-            helper.assertTrue(village.pathQueue().isEmpty(), "path never abandoned");
+            // Retried, not abandoned: an iron door is exactly the "no route yet" case (see doorOutside), which must
+            // keep the house queued for a later retry rather than lose its path to the bell forever.
+            helper.assertTrue(village.pathQueue().contains(house.origin()), "house was dropped from the queue instead of retried");
             helper.assertTrue(village.pathCells().isEmpty(), "path cells laid despite the door being iron");
             BlockState lower = helper.getBlockState(DOOR_LOWER);
             helper.assertTrue(lower.getBlock() instanceof DoorBlock doorBlock && !doorBlock.isOpen(lower), "iron door was opened");
@@ -595,6 +600,97 @@ public final class PathTests {
             helper.assertTrue(lower.getBlock() instanceof DoorBlock doorBlock && !doorBlock.isOpen(lower),
                     "the door was not closed again once the paver walked clear of it");
             VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_step_at_door", timeoutTicks = 6000)
+    public static void routesOverAForeignStepUnderTheDoorstepInsteadOfLosingTheRoute(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        BlockPos bell = helper.absolutePos(bellRelative);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        // The one cell a route can never detour around: doorOutside always returns exactly DOOR_OUTSIDE, so a
+        // player's cobblestone step right under it (same groundAt height as the flat grass everywhere else) must
+        // not throw the whole route away and leave the house with no path to the bell at all.
+        BlockPos step = DOOR_OUTSIDE.below();
+        helper.setBlock(step, Blocks.COBBLESTONE);
+        enrollPaver(helper, village, 12, 1, 20);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.pathQueue().isEmpty(), "path still queued");
+            helper.assertFalse(village.pathCells().isEmpty(), "no path cells laid");
+            helper.assertTrue(reachedBell(village, bell), "path never reaches within 2 of the bell");
+            helper.assertTrue(helper.getBlockState(step).is(Blocks.COBBLESTONE), "the cobblestone step under the doorstep was broken");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_stone_band", timeoutTicks = 8000)
+    public static void crossesAStoneBandAtGroundLevelInsteadOfBuryingItInDirt(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // A band of cobblestone the route has no way around (it spans the whole test area, replacing the grass
+        // GameTestSupport itself lays down): not natural ground (not diggable, so not a CUT), not replaceable, but
+        // exactly as solid and walkable as the grass it replaces (groundAt sees the same height either way), so the
+        // route must cross it as GROUND - stepping onto it as-is, one block below the walking height it would have
+        // used anyway - rather than as a RAISED cell that places its own dirt (later paved into a dirt path by
+        // MakePath) in the air right above it, leaving the cobblestone itself untouched but no longer the surface.
+        int bandZ = 16;
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            helper.setBlock(x, 0, bandZ, Blocks.COBBLESTONE);
+        }
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        BlockPos bell = helper.absolutePos(bellRelative);
+        int bandZAbs = helper.absolutePos(new BlockPos(0, 0, bandZ)).getZ();
+        // The natural ground-level walking height everywhere else in this flat area (one above the grass at
+        // relative y=0): a cell crossing the band at this same height is GROUND; anything higher is RAISED.
+        int groundSurfaceYAbs = helper.absolutePos(new BlockPos(0, 1, 0)).getY();
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        enrollPaver(helper, village, 12, 1, 20);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.pathQueue().isEmpty(), "path still queued");
+            helper.assertTrue(reachedBell(village, bell), "path never reaches within 2 of the bell");
+            List<BlockPos> crossing = village.pathCells().stream().filter(pos -> pos.getZ() == bandZAbs).toList();
+            helper.assertFalse(crossing.isEmpty(), "route never crosses the stone band");
+            for (BlockPos pos : crossing) {
+                helper.assertTrue(pos.getY() == groundSurfaceYAbs,
+                        "the stone band was crossed as a RAISED cell at " + pos.toShortString() + " instead of at ground level");
+            }
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_door_discard", timeoutTicks = 1500)
+    public static void closesADoorEvenAfterThePaverThatOpenedItIsDiscarded(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        Villager villager = enrollPaver(helper, village, 12, 1, 20);
+        AtomicBoolean discarded = new AtomicBoolean();
+        helper.onEachTick(() -> {
+            if (discarded.get()) {
+                return;
+            }
+            BlockState lower = helper.getBlockState(DOOR_LOWER);
+            if (lower.getBlock() instanceof DoorBlock doorBlock && doorBlock.isOpen(lower)) {
+                // The exact repro: gone the very tick the door opens, so no further tick of this paver, its job, or
+                // any task instance of its ever runs again - the only thing left that can still close the door has
+                // to owe nothing to any of those three still existing.
+                villager.discard();
+                discarded.set(true);
+            }
+        });
+        helper.runAfterDelay(1200, () -> {
+            helper.assertTrue(discarded.get(), "the door was never opened before the paver was discarded");
+            BlockState lower = helper.getBlockState(DOOR_LOWER);
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(lower.getBlock() instanceof DoorBlock doorBlock && !doorBlock.isOpen(lower),
+                    "the door was still open 1200 ticks after the paver that opened it was discarded");
+            helper.succeed();
         });
     }
 }
