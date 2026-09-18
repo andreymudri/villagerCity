@@ -27,7 +27,8 @@ Spec: `docs/specs/2026-09-17-terrain-and-lighting-design.md` (approved by the us
 
 A village on a hill whose storehouse holds only raw materials (oak logs, cobblestone, sand, wool, dye) keeps growing on its own:
 
-- the artisan crafts and smelts what the builder and the lamplighter need;
+- the artisan crafts what the builder and the lamplighter need; it does not smelt (Task 7, Step 8), so glass and
+  charcoal are supplied by a player;
 - the paver levels uneven plots and lays a walkable path, with steps and bridges, from each new house to the bell;
 - the lamplighter lights the village until no ground in it is dark enough for monsters to spawn;
 - new houses have a torch inside.
@@ -385,13 +386,12 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
   - `anUnmeetableOrderNamesItsBase`: order glass with no sand. `missingBase` contains sand.
 - [ ] **Step 4: verify and commit.** Build and GameTests green. Commit: `feat: plan vanilla crafting and smelting steps from storehouse stock`.
 
-### Task 7: the artisan crafts and smelts at a workshop by the storehouse
+### Task 7: the artisan crafts at a workshop by the storehouse
 
 **Files:**
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/ArtisanJob.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/craft/WorkshopService.java`
 - Create: `src/main/java/dev/andreymudri/villagercity/craft/CraftAtTable.java`
-- Create: `src/main/java/dev/andreymudri/villagercity/craft/SmeltInFurnace.java`
 - Create: `src/main/java/dev/andreymudri/villagercity/craft/VillageDemand.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageData.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageWorks.java`
@@ -402,7 +402,7 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
 
 - [ ] **Step 1: `WorkshopService.ensureWorkshop`.**
   - Skip when there is no storehouse, it is not loaded, or `WorldPermissions.mayGrief(level, null)` is false.
-  - For the crafting table, then the furnace: when the position is null or its block is gone, clear it and search the cells within 3 horizontal blocks of the storehouse, at storehouse y ±1. The first spot, in a fixed order, must be air or replaceable, with a sturdy floor and a free cell above, and outside `occupiedFootprints()` and path columns.
+  - For the crafting table: when the position is null or its block is gone, clear it and search the cells within 3 horizontal blocks of the storehouse, at storehouse y ±1. The village places NO furnace (Step 8). The first spot, in a fixed order, must be air or replaceable, with a sturdy floor and a free cell above, and outside `occupiedFootprints()` and path columns.
   - Place like `StorehouseService`: snapshot, `setBlock`, restore if `placementCancelled`. Then save the position.
 - [ ] **Step 2: `VillageDemand`.** `static Demand of(ServerLevel level, VillageData village, StorehouseBlockEntity storehouse)`, with `record Demand(List<Map.Entry<Item, Integer>> orders, Map<Item, Integer> reserved)`.
   - Builder needs: for the first plot, the blueprint's unfinished placements' materials (`BuilderJob.isDone`). With no plot and `jobCount(BUILDER) > 0`, the starter house's `requiredMaterials()`.
@@ -413,71 +413,56 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
   2. Compute the demand and run `CraftPlanner.plan`. Set `village.setArtisanOrders(...)` to strings like `"oak_door x1"`. With nothing to do, return null with `waitingFor = "no orders"`. With only unmet orders, use `waitingFor = "materials: " + missingBase ids`.
   3. Take the first step:
      - **CRAFT:** `times` is capped so the outputs fit one stack. Plan `TaskSequence.of(MoveTo.digOut(storehouse, 2.5), new Withdraw(storehouse, inputs), MoveTo.digOut(table, 2.5), new CraftAtTable(step), MoveTo.digOut(storehouse, 2.5), new Deposit(storehouse, any item))`.
-     - **SMELT:** add the fuel to the withdrawal. Fuel is the item with the highest stock beyond demand among charcoal, coal, and the log and plank tags. Count it with `AbstractFurnaceBlockEntity.getFuel()` burn times, at 200 ticks per item. Then plan `MoveTo.digOut(furnace, 2.5)`, `new SmeltInFurnace(furnace, input, count, fuel, fuelCount)`, back to the storehouse and `Deposit`.
+     - **SMELT:** the village does not smelt (Step 8). A plan containing a smelting step is not buildable: skip it, and report its output through `waitingFor = "materials: " + ...` so a player knows what to bring.
 - [ ] **Step 4: `CraftAtTable(CraftStep)`.** It must be within 3 blocks of the table.
   - Every 10 ticks it removes one batch of inputs from the villager's inventory, adds the result (`recipe.getResultItem(registries)` copy), and swings the arm.
   - It fails when inputs are missing or the result does not fit.
   - `describe`: `"crafting <item> at <pos>"`.
-- [ ] **Step 5: `SmeltInFurnace`.**
-  - Insert the input into furnace slot 0 and the fuel into slot 1. Fail when those slots hold other items.
-  - Wait near the furnace until slot 2 holds the expected count, or `count * 200 + 100` ticks have passed.
-  - Take slot 2 into the inventory.
-  - `describe`: `"smelting <item> in <pos>"`.
 - [ ] **Step 6: tests (`ArtisanTests`).**
   - `placesAWorkshopByTheStorehouse`, and replaces a broken one.
   - `craftsADoorFromLogsIntoTheStorehouse`: a builder on the roster and an unfinished plot needing a door, with only logs in stock. Eventually the storehouse holds an oak door.
-  - `smeltsGlassInTheFurnace`: sand and coal in stock, and demand for glass.
   - `neverUsesTheBuildersPlanks`: reserved planks stay.
-  - `aVillageWithOnlyLogsSandWoolAndDyeBuildsAHouse`: the end-to-end test. Stock:
+  - `aVillageWithLogsGlassWoolAndDyeBuildsAHouse`: the end-to-end test. Stock:
     - 60 oak logs;
     - 25 cobblestone;
-    - 2 sand;
+    - 2 glass (the village cannot make it: Step 8);
     - 3 white wool;
     - 3 red dye;
-    - 1 coal.
+    - 1 coal (for torches, which are crafted, not smelted).
 
     With a builder and an artisan, succeed when `houseCount() == 1` (timeout 24000).
   - `respectsMobGriefingForTheWorkshop`.
-- [ ] **Step 8: the village only claims what it watched itself make.**
+- [ ] **Step 8: the village does not smelt.**
 
-  Five review rounds established this the hard way: a furnace slot carries no ownership information, and the
-  village's own finished batch is byte-identical to a player's. Every rule that inferred ownership from furnace
-  contents was defeated by contents a reviewer constructed, and the last one was defeated by a plain vanilla hopper
-  with no player action at all. A persisted receipt is a claim about items that are gone the moment nobody is
-  looking, so the receipt is deleted. What replaces it is the one thing that does yield real ownership: **presence**.
+  Five review rounds found measured item theft in the artisan's use of a furnace, every one of them traced to the
+  same fact: a furnace is shared with players, a furnace slot carries no ownership information, and the village's own
+  finished batch is byte-identical to a player's. Each fix closed the probe that found it and left the class open —
+  the last one was defeated by a plain vanilla hopper with no player action at all. The user's decision is to cut the
+  feature rather than keep paying for it, and this step records that decision so nothing reintroduces it by accident.
 
-  - **No persisted furnace state.** `VillageWorks`, `VillageData` and `VillageCodecs` keep no furnace claim; the
-    record and its codec are removed. Nothing about a furnace survives a reload.
-  - **A batch is opened only on a furnace whose three slots are all empty**, checked at the tick the items move.
-    Anything in any slot means the furnace belongs to someone else right now.
-  - **Attribution is by observation, not inference.** While the artisan stands at the furnace the task samples the
-    slots each tick. Output that appears while the batch's own input shrinks by the same amount is the village's;
-    output that appears without the input shrinking is not, and is never counted, taken or deposited. Vanilla writes
-    the result and shrinks the input in the same `serverTick` (`AbstractFurnaceBlockEntity.burn`), so the two move
-    together and the correlation is exact.
-  - **The village takes only what it observed being produced**, never more than it put in.
-  - **An interrupted batch is abandoned, permanently.** A villager walking out of reach, a chunk unloading, a death
-    or a restart ends the batch; whatever is in the furnace stays there and the village never returns to claim it.
-    Losing the village's own sand is a bad day; taking a player's sand is a bug.
-  - **The village never removes anything from the fuel slot**, on any path.
-  - **A blocked furnace is reported and then escaped.** The blocker is named by position, slot and item so a player
-    can clear it, and the village goes on with its other orders. If it stays blocked, `WorkshopService` places the
-    village's furnace somewhere else, so a furnace a player took over — or one holding the village's own abandoned
-    batch — can never stop the village working for good. Abandoned items stay where they are for a player to collect.
-  - **Prevention keeps this cheap.** The artisan still refuses to start a batch it cannot finish before its own
-    schedule turns to REST, so the common interruption never happens; that refusal does not apply when
-    `doDaylightCycle` is off, because a clock that never advances never reaches bedtime.
-- [ ] **Step 9: tests for what the village may take.** In `ArtisanTests`, each in its own `vc_` batch:
-  - a batch is not opened on a furnace holding anything, in any one of the three slots, including a fuel a player left;
-  - output a player drops into the result slot mid-batch is never taken, however much of it there is;
-  - a hopper draining the result slot, with no player action, never leads to the village taking anything it did not
-    watch itself make — neither while the villager is present nor after it has walked away;
-  - an interrupted batch is abandoned and never claimed on a later trip, with the furnace contents left untouched;
-  - nothing is ever removed from the fuel slot;
-  - a blocked furnace is reported by position, slot and item, the village keeps filling other orders, and it
-    eventually places its furnace elsewhere rather than stalling;
-  - a village that is short of daylight sits the batch out, and one whose clock is frozen does not.
-- [ ] **Step 7: verify and commit.** Build and GameTests green. Commit: `feat: the artisan crafts and smelts what the village is short of at a workshop by the storehouse`.
+  - **`SmeltInFurnace` is deleted**, along with every smelting path in `ArtisanJob` and every test that exercised one.
+  - **The workshop is a crafting table and nothing else.** `WorkshopService` no longer places, records, replaces or
+    relocates a furnace, and `VillageWorks` keeps no furnace position. A furnace an older version already placed is
+    **left standing** — the village simply stops maintaining it. Breaking a block a player may be using to fix our own
+    bookkeeping is exactly the kind of thing this step exists to prevent. An old save that recorded a furnace position
+    must still load, with the unknown field ignored.
+  - **The artisan crafts, and only crafts.** A plan whose steps include smelting is not buildable: the artisan skips
+    it and reports what a player must bring.
+  - **The report names the item the village actually needs, not its raw material.** The village cannot turn sand into
+    glass any more, so sand is of no use to it and `materials: sand` would send a player to the wrong place. An
+    unbuildable order reports the ORDER's own item — `materials: glass` — which is the whole user-facing surface of
+    this cut.
+  - **Smelted goods become player-supplied.** Glass and charcoal come from the player's own furnace into the
+    storehouse. Torches are unaffected: they are crafted, from coal or charcoal plus a stick.
+- [ ] **Step 9: tests for a village that does not smelt.** In `ArtisanTests`, each in its own `vc_` batch:
+  - no furnace is ever placed, and the workshop is complete with a crafting table alone;
+  - a village whose storehouse holds sand but no glass, with a plot wanting glass, reports `materials: glass` — not
+    sand — and goes on filling the orders it can;
+  - a furnace standing next to the storehouse, holding a player's items, is never touched, never emptied and never
+    recorded, however long the village runs;
+  - an old save that recorded a furnace position loads, and the village neither uses nor maintains that furnace;
+  - the village still crafts everything its blueprint needs that is not smelted: doors, planks and torches.
+- [ ] **Step 7: verify and commit.** Build and GameTests green. Commit: `feat: the artisan crafts what the village is short of at a workshop by the storehouse`.
 
 ### Task 8: README, handoff notes and a village-wide end-to-end check
 
