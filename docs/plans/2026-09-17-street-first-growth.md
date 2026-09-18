@@ -55,6 +55,7 @@ only for costing the paver more than it can move.
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageData.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageCodecs.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/command/VillageCommand.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/command/VillageOutline.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/VillageRegistryTests.java`
 
 - [ ] **Step 1:** Add `record StreetCell(BlockPos pos, int hops)` to `VillageWorks`, with a codec, and a
@@ -67,7 +68,10 @@ only for costing the paver more than it can move.
       saved through the codec, so a door the paver opened is closed after a restart (spec, "Doors").
 - [ ] **Step 4:** Extend `VillageCodecs` for both new fields, defaulting to empty so old saves load.
 - [ ] **Step 5:** Add to `VillageCommand.describe`: `streets: N cells, M ends, deepest H hops`.
-- [ ] **Step 6:** Tests in `VillageRegistryTests`: a village with three street cells round-trips through the codec with
+- [ ] **Step 6:** `VillageOutline` draws the street graph: one dust per street cell, in a colour distinct from the four
+      it already uses (white village, orange search, blue plots, green houses), so `/villagercity show` makes the streets
+      visible as they grow. Street ends get a second dust a block higher, so the frontier is readable at a glance.
+- [ ] **Step 7:** Tests in `VillageRegistryTests`: a village with three street cells round-trips through the codec with
       hops intact; `streetEnds` returns only the frontier; an old save with no `streets` field loads with an empty graph;
       a recorded opened door survives a round trip.
 
@@ -107,13 +111,18 @@ only for costing the paver more than it can move.
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/plot/PlotPlanner.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/plot/PlotRules.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/plot/Earthwork.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/command/PlotDiagnostics.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/UnevenPlotTests.java`
+- Test: `src/main/java/dev/andreymudri/villagercity/gametest/VillageCommandTests.java`
 
 **Depends:** T1
 
 **Model:** capable
 
 - [ ] **Step 1:** Delete `PlotRules.MAX_HEIGHT_VARIANCE` and every use of it. Flatness is no longer a rule.
+      `command/PlotDiagnostics.java` uses it in four places and will not compile once it is gone, which is why that file
+      and `VillageCommandTests` are in this task's file set: `/villagercity why` must keep explaining a rejected spot,
+      against the new rules rather than the old one.
 - [ ] **Step 2:** `PlotPlanner.findSite` only returns pads whose footprint plus `MARGIN` touches at least one street
       cell, and sets the pad's floor to that cell's Y. A village with no street cells falls back to today's behaviour so
       a village without a paver keeps working.
@@ -123,10 +132,16 @@ only for costing the paver more than it can move.
 - [ ] **Step 4:** Order candidate pads by: fewest hops on the street cell they touch, then least earthwork, then nearest
       the bell.
 - [ ] **Step 5:** Skip one pad in eight, decided by a hash of the pad's origin so the choice is stable across reloads.
-- [ ] **Step 6:** Tests in `UnevenPlotTests`: a pad touching a street is chosen and its floor equals that street cell's
+- [ ] **Step 6:** `PlotDiagnostics.explain` reports the new rules in place of the deleted one: the hop count of the
+      nearest street cell (or that there is none), the earthwork the pad would need against the 80-block budget, the
+      worst column against the 6-block step, and which of the four acceptance rules turned the spot down (spec, "Command
+      output"). `VillageCommandTests.whyAgreesWithThePlotSearch` pins it to `PlotPlanner`; keep that pin meaningful
+      rather than relaxing the test — if the two can disagree, the command is lying to whoever asked.
+- [ ] **Step 7:** Tests in `UnevenPlotTests`: a pad touching a street is chosen and its floor equals that street cell's
       Y; a pad needing 90 blocks of earth is refused while one needing 70 is taken; a pad with one column 7 off the floor
       is refused; an uneven pad the old flatness rule would have refused is now accepted; a village with no streets still
-      plans as before; the skip is stable when the same search runs twice.
+      plans as before; the skip is stable when the same search runs twice. In `VillageCommandTests`, `why` explains a
+      spot refused for earthwork and names the budget it broke.
 
 ### Task 4: the village grows streets when it has nowhere to build
 
