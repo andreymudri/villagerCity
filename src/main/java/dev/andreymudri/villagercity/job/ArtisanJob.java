@@ -79,10 +79,75 @@ public final class ArtisanJob implements Job {
             waitingFor = result.unmet().isEmpty() ? "no orders" : "materials: " + shortfall(result);
             return null;
         }
-        CraftStep step = trimmed(result.steps().get(0));
-        return step.kind() == CraftStep.Kind.SMELT
-                ? smelt(storehousePos, storehouse, furnace, step, demand)
-                : craft(storehousePos, table, step);
+        // The first step the artisan can actually run today, not simply the first one planned: a smelt it cannot do
+        // right now must not freeze every order queued behind it. A step whose inputs the storehouse does not hold is
+        // one that waits for an earlier step's output, so it is skipped with the step it depends on.
+        String blocked = null;
+        for (CraftStep planned : result.steps()) {
+            CraftStep step = trimmed(planned);
+            if (!storehouseHolds(storehouse, demand.reserved(), step.inputs())) {
+                continue;
+            }
+            if (step.kind() != CraftStep.Kind.SMELT) {
+                return craft(storehousePos, table, step);
+            }
+            String why = furnaceBlockedBy(level, furnace, step);
+            Task smelting = why == null ? smelt(level, storehousePos, storehouse, furnace, step, demand) : null;
+            if (smelting != null) {
+                return smelting;
+            }
+            blocked = blocked != null ? blocked : (why != null ? why : "fuel for the furnace");
+        }
+        waitingFor = blocked != null ? blocked
+                : result.unmet().isEmpty() ? "no orders" : "materials: " + shortfall(result);
+        return null;
+    }
+
+    /** Whether the storehouse holds every one of these amounts on top of what other jobs are counted on having. */
+    private static boolean storehouseHolds(StorehouseBlockEntity storehouse, Map<Item, Integer> reserved, Map<Item, Integer> wanted) {
+        for (Map.Entry<Item, Integer> entry : wanted.entrySet()) {
+            if (storehouse.count(entry.getKey()) - reserved.getOrDefault(entry.getKey(), 0) < entry.getValue()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * What stops this batch from going into the village furnace right now, or null when nothing does. The furnace is
+     * shared: a slot holding somebody else's items is theirs to clear, and the artisan says so through
+     * {@link #waitingFor} instead of walking a trip that can only fail.
+     */
+    private static @Nullable String furnaceBlockedBy(ServerLevel level, BlockPos furnace, CraftStep step) {
+        if (step.inputs().size() != 1) {
+            return "a smelting step with one input";
+        }
+        if (!(level.getBlockEntity(furnace) instanceof AbstractFurnaceBlockEntity entity)) {
+            return "a furnace by the storehouse";
+        }
+        Item input = step.inputs().keySet().iterator().next();
+        ItemStack inputSlot = entity.getItem(SmeltInFurnace.SLOT_INPUT);
+        ItemStack resultSlot = entity.getItem(SmeltInFurnace.SLOT_RESULT);
+        ItemStack fuelSlot = entity.getItem(SmeltInFurnace.SLOT_FUEL);
+        if (!inputSlot.isEmpty() && !inputSlot.is(input)) {
+            return occupied(furnace, inputSlot);
+        }
+        if (!resultSlot.isEmpty() && !resultSlot.is(step.output())) {
+            return occupied(furnace, resultSlot);
+        }
+        if (!fuelSlot.isEmpty() && burnTime(fuelSlot.getItem()) <= 0) {
+            return occupied(furnace, fuelSlot);
+        }
+        return null;
+    }
+
+    private static String occupied(BlockPos furnace, ItemStack held) {
+        return "the furnace at " + furnace.toShortString() + " to be emptied of " + path(held.getItem());
+    }
+
+    private static int burnTime(Item item) {
+        Integer burn = AbstractFurnaceBlockEntity.getFuel().get(item);
+        return burn == null ? 0 : burn;
     }
 
     /** Storehouse, table, storehouse: withdraw the batch's inputs, craft them, and store everything brought back. */
@@ -96,28 +161,37 @@ public final class ArtisanJob implements Job {
                 new Deposit(storehousePos, stack -> true));
     }
 
-    /** As {@link #craft}, at the furnace and carrying the fuel as well; null while no fuel can be spared. */
-    private @Nullable Task smelt(BlockPos storehousePos, StorehouseBlockEntity storehouse, BlockPos furnace,
-                                 CraftStep step, VillageDemand.Demand demand) {
-        if (step.inputs().size() != 1) {
-            waitingFor = "a single smelting input";
+    /**
+     * As {@link #craft}, at the furnace: the villager carries only what the furnace still lacks of the batch and of
+     * its fuel, so a batch an earlier trip left behind is finished rather than duplicated. Null when no fuel can be
+     * spared, which is a state the caller reports rather than a trip worth walking.
+     */
+    private static @Nullable Task smelt(ServerLevel level, BlockPos storehousePos, StorehouseBlockEntity storehouse,
+                                        BlockPos furnace, CraftStep step, VillageDemand.Demand demand) {
+        if (!(level.getBlockEntity(furnace) instanceof AbstractFurnaceBlockEntity entity)) {
             return null;
         }
         Map.Entry<Item, Integer> input = step.inputs().entrySet().iterator().next();
         Map<Item, Integer> claimed = new LinkedHashMap<>(demand.reserved());
         step.inputs().forEach((item, amount) -> claimed.merge(item, amount, Integer::sum));
-        Map.Entry<Item, Integer> fuel = chooseFuel(storehouse, claimed, step.times());
+        Map.Entry<Item, Integer> fuel = chooseFuel(entity, storehouse, claimed, SmeltInFurnace.remaining(entity, step.output(), step.times()));
         if (fuel == null) {
-            waitingFor = "fuel for the furnace";
             return null;
         }
-        Map<Item, Integer> withdrawal = new LinkedHashMap<>(step.inputs());
-        withdrawal.merge(fuel.getKey(), fuel.getValue(), Integer::sum);
+        Map<Item, Integer> withdrawal = new LinkedHashMap<>();
+        int inputTopUp = SmeltInFurnace.inputTopUp(entity, input.getKey(), step.times(), step.output());
+        if (inputTopUp > 0) {
+            withdrawal.put(input.getKey(), inputTopUp);
+        }
+        int fuelTopUp = SmeltInFurnace.fuelTopUp(entity, fuel.getKey(), fuel.getValue());
+        if (fuelTopUp > 0) {
+            withdrawal.merge(fuel.getKey(), fuelTopUp, Integer::sum);
+        }
         return TaskSequence.of(
                 MoveTo.digOut(storehousePos, WORK_REACH),
                 new Withdraw(storehousePos, withdrawal),
                 MoveTo.digOut(furnace, WORK_REACH),
-                new SmeltInFurnace(furnace, input.getKey(), input.getValue(), fuel.getKey(), fuel.getValue()),
+                new SmeltInFurnace(furnace, input.getKey(), step.times(), fuel.getKey(), fuel.getValue(), step.output()),
                 MoveTo.digOut(storehousePos, WORK_REACH),
                 new Deposit(storehousePos, stack -> true));
     }
@@ -126,8 +200,23 @@ public final class ArtisanJob implements Job {
      * The spare fuel with the most stock behind it, and how much of it burning {@code items} items takes at
      * {@link SmeltInFurnace#TICKS_PER_ITEM} each. Stock another job is counted on, and the batch's own input, are not
      * spare; a fuel the village cannot spare enough of is skipped rather than half-loaded. Null when none qualifies.
+     * <p>
+     * Fuel already in the furnace decides the batch's fuel, whatever the storehouse holds more of: the task refuses a
+     * fuel slot holding anything else, so a leftover half-burned stack has to be used up rather than worked around.
      */
-    private static @Nullable Map.Entry<Item, Integer> chooseFuel(StorehouseBlockEntity storehouse, Map<Item, Integer> claimed, int items) {
+    private static @Nullable Map.Entry<Item, Integer> chooseFuel(AbstractFurnaceBlockEntity entity, StorehouseBlockEntity storehouse,
+                                                                 Map<Item, Integer> claimed, int items) {
+        ItemStack fuelSlot = entity.getItem(SmeltInFurnace.SLOT_FUEL);
+        if (!fuelSlot.isEmpty()) {
+            Item held = fuelSlot.getItem();
+            int burn = burnTime(held);
+            if (burn <= 0) {
+                return null;
+            }
+            int needed = Mth.ceil(items * (double) SmeltInFurnace.TICKS_PER_ITEM / burn);
+            long spare = storehouse.count(held) - claimed.getOrDefault(held, 0);
+            return spare >= Math.max(0, needed - fuelSlot.getCount()) ? Map.entry(held, needed) : null;
+        }
         Map<Item, Integer> burnTimes = AbstractFurnaceBlockEntity.getFuel();
         Item best = null;
         long bestSpare = 0;

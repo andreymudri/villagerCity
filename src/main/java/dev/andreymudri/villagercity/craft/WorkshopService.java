@@ -1,6 +1,7 @@
 package dev.andreymudri.villagercity.craft;
 
 import dev.andreymudri.villagercity.citizen.WorldPermissions;
+import dev.andreymudri.villagercity.citizen.task.MoveTo;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
 import java.util.ArrayList;
@@ -11,9 +12,13 @@ import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.Mob;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.pathfinder.Path;
+import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 
 /**
@@ -72,7 +77,12 @@ public final class WorkshopService {
         }
     }
 
-    /** An air or replaceable cell with a sturdy floor and a free cell above, on no laid path and in no footprint. */
+    /**
+     * An air or replaceable cell with a sturdy floor and a free cell above, on no laid path, in no footprint, and with
+     * nothing alive standing in it. The last of those is why a player leaning on the storehouse is never shoved out of
+     * the way by a crafting table: a workshop block fills the cell exactly as {@code PlaceBlock} does, so it refuses an
+     * occupied one on the same terms and walks idle mobs aside for the next village tick.
+     */
     private static boolean isFree(ServerLevel level, VillageData village, List<Footprint> occupied, BlockPos spot) {
         if (!level.isLoaded(spot) || village.isPathColumn(spot.getX(), spot.getZ())
                 || occupied.stream().anyMatch(footprint -> footprint.contains(spot.getX(), spot.getZ()))) {
@@ -87,7 +97,29 @@ public final class WorkshopService {
             return false;
         }
         BlockState above = level.getBlockState(spot.above());
-        return above.isAir() || above.canBeReplaced();
+        if (!above.isAir() && !above.canBeReplaced()) {
+            return false;
+        }
+        List<LivingEntity> occupants = level.getEntitiesOfClass(LivingEntity.class, new AABB(spot));
+        if (occupants.isEmpty()) {
+            return true;
+        }
+        standAside(level, spot, occupants);
+        return false;
+    }
+
+    /** Paths idle mobs out of the cell, the way {@code PlaceBlock} does, so a later village tick finds it free. */
+    private static void standAside(ServerLevel level, BlockPos spot, List<LivingEntity> occupants) {
+        for (LivingEntity occupant : occupants) {
+            if (occupant instanceof Mob mob && mob.getNavigation().isDone()) {
+                double side = mob.getX() < spot.getX() + 0.5 ? -2.0 : 2.0;
+                Path path = mob.getNavigation().createPath(
+                        BlockPos.containing(spot.getX() + 0.5 + side, spot.getY(), spot.getZ() + 0.5), 0);
+                if (path != null) {
+                    mob.getNavigation().moveTo(path, MoveTo.SPEED);
+                }
+            }
+        }
     }
 
     /**
