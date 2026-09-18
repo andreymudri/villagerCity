@@ -137,10 +137,11 @@ public final class PathWork implements Job {
      * right as a fresh route is computed, the door is typically still far from its opener, who has not moved yet,
      * so closing on distance alone the moment it is opened would shut it again before the paver ever reaches it.
      * Never touches a door that is no longer the one this mod opened (a player broke it and put another there, an
-     * iron one even): tracking is simply dropped instead. Re-checks {@link WorldPermissions#mayGrief} right before
-     * closing, not just when it was opened: if griefing has since been disallowed, the door is left open this sweep
-     * (tracking kept, for a later sweep to try again) rather than forced shut against the very rule that would have
-     * stopped this mod opening it in the first place.
+     * iron one even): tracking is simply dropped instead. Never re-checks {@link WorldPermissions#mayGrief} here:
+     * that only ever gates {@link #doorApproach} OPENING a door, and closing one this mod already opened is a
+     * restoration of the world, not a modification of it - refusing to close it because doMobGriefing was toggled
+     * off mid-session would leave a house standing open indefinitely, exactly the exposure this whole sweep exists
+     * to prevent, for no benefit to whatever the gamerule is meant to protect.
      */
     private static void closeIfClear(ServerLevel level, OpenDoor door, DoorState state) {
         BlockState blockState = level.getBlockState(door.pos());
@@ -161,9 +162,6 @@ public final class PathWork implements Job {
         }
         if (!(blockState.getBlock() instanceof DoorBlock doorBlock) || !doorBlock.isOpen(blockState)) {
             OPEN_DOORS.remove(door);
-            return;
-        }
-        if (!WorldPermissions.mayGrief(level, owner)) {
             return;
         }
         doorBlock.setOpen(owner instanceof Villager villager ? villager : null, level, blockState, door.pos(), false);

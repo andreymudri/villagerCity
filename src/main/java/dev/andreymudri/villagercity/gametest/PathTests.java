@@ -16,12 +16,15 @@ import dev.andreymudri.villagercity.storehouse.StorehouseContent;
 import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
@@ -40,6 +43,9 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.living.LivingDestroyBlockEvent;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
 
 @GameTestHolder(VillagerCity.MODID)
 @PrefixGameTestTemplate(false)
@@ -239,6 +245,69 @@ public final class PathTests {
                 }
             }
             helper.assertFalse(anyPath, "a path was laid despite the bell being walled off");
+            VillageTestSupport.remove(helper, village);
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_no_route_backoff", timeoutTicks = 4600)
+    public static void backsOffTheNoRouteRetryInsteadOfSearchingEveryTick(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        for (int x = 21; x <= 27; x++) {
+            for (int z = 21; z <= 27; z++) {
+                for (int y = 0; y <= 4; y++) {
+                    helper.setBlock(x, y, z, Blocks.BRICKS);
+                }
+            }
+        }
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        BuildingRecord house = placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        // The exact "retrying in N ticks" line plan() logs once per actual search attempt, never once per idle
+        // tick: captured here, in order, to pin the whole backoff sequence (doubling from
+        // NO_ROUTE_BACKOFF_START_TICKS, capped at NO_ROUTE_BACKOFF_MAX_TICKS) rather than merely its existence.
+        // Filtered by this house's own origin so a concurrently-running batch's own stuck house never pollutes it.
+        String marker = house.origin().toString();
+        List<Long> delays = Collections.synchronizedList(new ArrayList<>());
+        Pattern retryingIn = Pattern.compile("retrying in (\\d+) ticks");
+        org.apache.logging.log4j.core.Logger log4jLogger =
+                (org.apache.logging.log4j.core.Logger) LogManager.getLogger(VillagerCity.LOGGER.getName());
+        AbstractAppender appender = new AbstractAppender("vc-backoff-capture-" + marker.hashCode(), null, null, false, null) {
+            @Override
+            public void append(LogEvent event) {
+                String message = event.getMessage().getFormattedMessage();
+                if (!message.contains(marker)) {
+                    return;
+                }
+                Matcher matcher = retryingIn.matcher(message);
+                if (matcher.find()) {
+                    delays.add(Long.parseLong(matcher.group(1)));
+                }
+            }
+        };
+        appender.start();
+        log4jLogger.addAppender(appender);
+        enrollPaver(helper, village, 12, 1, 20);
+        helper.runAfterDelay(4400, () -> {
+            log4jLogger.removeAppender(appender);
+            List<Long> expected = new ArrayList<>();
+            long delay = PathWork.NO_ROUTE_BACKOFF_START_TICKS;
+            for (int i = 0; i < 6; i++) {
+                expected.add(delay);
+                delay = Math.min(delay * 2, PathWork.NO_ROUTE_BACKOFF_MAX_TICKS);
+            }
+            List<Long> captured;
+            synchronized (delays) {
+                captured = new ArrayList<>(delays);
+            }
+            helper.assertTrue(captured.size() >= expected.size(),
+                    "fewer retries in 4400 ticks than the backoff sequence predicts: " + captured);
+            // A generous upper bound on how many attempts a single backed-off, permanently stuck house can need in
+            // this window: without the backoff (a fresh search every idle tick instead) this runs into the hundreds.
+            helper.assertTrue(captured.size() <= 14, "far more retries than the backoff should allow: " + captured);
+            helper.assertTrue(captured.subList(0, expected.size()).equals(expected),
+                    "retry delay sequence " + captured + " does not match the expected doubling/cap sequence " + expected);
             VillageTestSupport.remove(helper, village);
             helper.succeed();
         });
@@ -678,8 +747,8 @@ public final class PathTests {
         });
     }
 
-    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_door_griefing_after_open", timeoutTicks = 2000)
-    public static void keepsTrackingTheDoorInsteadOfForceClosingWhenGriefingTurnsOffAfterOpening(GameTestHelper helper) {
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_door_griefing_after_open", timeoutTicks = 1600)
+    public static void closesADoorItOpenedEvenWithMobGriefingOff(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         BlockPos bellRelative = new BlockPos(24, 1, 24);
         VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
@@ -687,8 +756,8 @@ public final class PathTests {
         placeStarterHouse(helper, village, HOUSE_ORIGIN);
         Villager villager = enrollPaver(helper, village, 12, 1, 20);
         BlockPos farAway = helper.absolutePos(new BlockPos(2, 1, 2));
+        boolean previous = helper.getLevel().getGameRules().getBoolean(GameRules.RULE_MOBGRIEFING);
         AtomicBoolean opened = new AtomicBoolean();
-        AtomicLong openedAtTick = new AtomicLong(-1);
         helper.onEachTick(() -> {
             BlockState lower = helper.getBlockState(DOOR_LOWER);
             if (!opened.get()) {
@@ -696,26 +765,28 @@ public final class PathTests {
                     return;
                 }
                 opened.set(true);
-                openedAtTick.set(helper.getLevel().getGameTime());
                 // Turned off right as the door opens, well before the paver could ever walk clear of it on its own:
-                // the sweep must never force it shut while griefing is disallowed, the same rule that stops this
-                // mod opening a door in the first place (see neverOpensTheDoorWithMobGriefingOff).
+                // closing a door this mod opened is a restoration of the player's world, not a modification of it,
+                // so the sweep must still close it - refusing to would leave a house standing open indefinitely by
+                // nothing more than a gamerule toggle, the exact hostile-mob exposure this sweep exists to prevent.
                 helper.getLevel().getGameRules().getRule(GameRules.RULE_MOBGRIEFING).set(false, helper.getLevel().getServer());
             }
             // Kept far enough, every tick from the moment it opens, that it is never once seen within
             // DOOR_CLOSE_DISTANCE of it: only the DOOR_OPEN_TIMEOUT_TICKS safety net ever attempts to close this
-            // door, so whether that attempt actually goes through is entirely down to the mayGrief re-check.
+            // door, so the fixed delay below is chosen well past that timeout regardless of exactly when it opened.
             villager.teleportTo(farAway.getX() + 0.5, farAway.getY(), farAway.getZ() + 0.5);
         });
-        helper.succeedWhen(() -> {
+        // A fixed delay, not succeedWhen: the gamerule is restored as the very first statement here, on the one
+        // and only path this callback ever takes, so a failing assert below never leaks mobGriefing=false into the
+        // rest of the run the way restoring it after the asserts (and only on eventual success) would.
+        helper.runAfterDelay(1400, () -> {
+            helper.getLevel().getGameRules().getRule(GameRules.RULE_MOBGRIEFING).set(previous, helper.getLevel().getServer());
             helper.assertTrue(opened.get(), "the door was never opened by the paver");
-            helper.assertTrue(helper.getLevel().getGameTime() - openedAtTick.get() > PathWork.DOOR_OPEN_TIMEOUT_TICKS + 100,
-                    "not enough ticks have passed since the door opened for the timeout safety net to have tried closing it");
             BlockState lower = helper.getBlockState(DOOR_LOWER);
-            helper.getLevel().getGameRules().getRule(GameRules.RULE_MOBGRIEFING).set(true, helper.getLevel().getServer());
             VillageTestSupport.remove(helper, village);
-            helper.assertTrue(lower.getBlock() instanceof DoorBlock doorBlock && doorBlock.isOpen(lower),
-                    "the door was force-closed while mobGriefing was off");
+            helper.assertTrue(lower.getBlock() instanceof DoorBlock doorBlock && !doorBlock.isOpen(lower),
+                    "the door was left open while mobGriefing was off instead of being closed");
+            helper.succeed();
         });
     }
 
@@ -808,6 +879,69 @@ public final class PathTests {
             }
             VillageTestSupport.remove(helper, village);
         });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_fence_line_capped", timeoutTicks = 8000)
+    public static void neverCapsAFenceLineWithAPlacedPath(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // Same flush, partial-width fence line as routeNeverStandsOnAFencePost, but this asserts the OTHER half of
+        // the fix: not merely that no path cell stands directly ON the fence, but that nothing is built directly
+        // ABOVE it either. standableSupport alone stops the former; without also refusing the whole column (see the
+        // fix in find()'s neighbour loop), the search still finds a RAISED cell one block higher, whose support is
+        // the open air above the fence post - accepted by supportBlocked, since open air is exactly what a RAISED
+        // cell is meant to place into - and caps the fence with dirt, then MakePath turns it into a dirt path,
+        // turning a player's boundary fence into a crossing.
+        int fenceZ = 16;
+        for (int x = 0; x < 30; x++) {
+            helper.setBlock(x, 0, fenceZ, Blocks.OAK_FENCE);
+        }
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        BlockPos bell = helper.absolutePos(bellRelative);
+        int fenceZAbs = helper.absolutePos(new BlockPos(0, 0, fenceZ)).getZ();
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        ServerLevel level = helper.getLevel();
+        enrollPaver(helper, village, 12, 1, 20);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.pathQueue().isEmpty(), "path still queued");
+            helper.assertTrue(reachedBell(village, bell), "path never reaches within 2 of the bell");
+            for (int x = 0; x < 30; x++) {
+                BlockPos above = helper.absolutePos(new BlockPos(x, 1, fenceZ));
+                helper.assertFalse(level.getBlockState(above).is(Blocks.DIRT_PATH) || level.getBlockState(above).is(Blocks.DIRT),
+                        "the fence post at x=" + x + " was capped with a placed block at " + above.toShortString());
+                helper.assertFalse(village.pathCells().stream().anyMatch(pos -> pos.getZ() == fenceZAbs && pos.getX() == above.getX()),
+                        "a path cell was recorded directly above the fence post at x=" + x);
+            }
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** The doorstep cell itself unusable (a chest on it, as in {@code neverBreaksAChestAtTheDoor}), and the first
+     * neighbour {@code resolveStart} tries (north, per its own {@code Direction.Plane.HORIZONTAL} order) turned to a
+     * fence post at exactly the height that makes its {@code ground().y()} equal the doorstep's own height. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_start_fallback_fence", timeoutTicks = 100)
+    public static void startFallbackNeverStandsOnAFencePost(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        helper.setBlock(DOOR_OUTSIDE, Blocks.CHEST);
+        BlockPos fenceSupport = new BlockPos(DOOR_OUTSIDE.getX(), DOOR_OUTSIDE.getY() - 1, DOOR_OUTSIDE.getZ() - 1);
+        helper.setBlock(fenceSupport, Blocks.OAK_FENCE);
+        ServerLevel level = helper.getLevel();
+        List<PathRoute.Cell> route = PathRoute.find(level, village, helper.absolutePos(DOOR_OUTSIDE), village.center())
+                .orElseThrow(() -> new IllegalStateException("no route found"));
+        PathRoute.Cell startCell = route.get(0);
+        BlockPos fencedNeighbour = helper.absolutePos(new BlockPos(DOOR_OUTSIDE.getX(), DOOR_OUTSIDE.getY(), DOOR_OUTSIDE.getZ() - 1));
+        // Without the GROUND branch of resolveStart's check (standableSupport, reached only through resolveStart,
+        // never through the fluid-to-BRIDGE promotion the way the water test's repro is), this neighbour is
+        // accepted outright as GROUND: the route's first cell then stands inside the fence post with nothing built,
+        // and the house leaves the queue as if it had a real path to the bell.
+        helper.assertFalse(startCell.surface().equals(fencedNeighbour),
+                "the start fallback stood on the fence-post neighbour at " + fencedNeighbour.toShortString() + " instead of skipping it");
+        VillageTestSupport.remove(helper, village);
+        helper.succeed();
     }
 
     /** The doorstep cell itself unusable (a chest on it, as in {@code neverBreaksAChestAtTheDoor}), and the first

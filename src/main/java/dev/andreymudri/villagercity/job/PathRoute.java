@@ -125,6 +125,15 @@ public final class PathRoute {
                 if (!ground.present()) {
                     continue;
                 }
+                // A column whose own natural ground is a fence, wall, gate or similar refuses the whole column, not
+                // merely a GROUND cell standing directly on it: without this, the h loop below still finds a RAISED
+                // alternative one block higher, whose support is the open air right above the obstruction - not a
+                // foreign object supportBlocked would ever refuse - and caps a player's fence line with a placed
+                // dirt path instead of routing around it, the same way a house's own footprint is routed around
+                // rather than crossed. Never applied to a fluid column: that is exactly what BRIDGE is for.
+                if (!ground.fluid() && !standableSupport(level, new BlockPos(nx, ground.y() - 1, nz))) {
+                    continue;
+                }
                 int minH = Math.max(node.state.h() - 1, ground.y() - MAX_ABOVE_GROUND);
                 int maxH = Math.min(node.state.h() + 1, ground.y() + MAX_ABOVE_GROUND);
                 for (int h = minH; h <= maxH; h++) {
