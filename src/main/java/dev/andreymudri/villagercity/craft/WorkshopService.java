@@ -45,13 +45,38 @@ public final class WorkshopService {
             return;
         }
         ensure(level, village, storehouse, Blocks.CRAFTING_TABLE, village.craftingTablePos(), village::setCraftingTablePos);
-        BlockPos furnaceBefore = village.furnacePos();
         ensure(level, village, storehouse, Blocks.FURNACE, village.furnacePos(), village::setFurnacePos);
-        if (furnaceBefore != null && !furnaceBefore.equals(village.furnacePos())) {
-            // The furnace this claim was written against is gone, and its contents dropped with it. The receipt
-            // would otherwise send the artisan to a brand new furnace to collect a batch nobody ever put in it.
-            village.clearFurnaceClaim();
+    }
+
+    /**
+     * Gives up on the furnace the village has and builds another one somewhere else, leaving the old one and
+     * everything in it exactly where they are. Returns whether the village ended up somewhere new.
+     * <p>
+     * This is what makes abandoning a batch affordable. The village never takes back what it left in a furnace it
+     * walked away from, and it refuses to start a batch in a furnace that holds anything at all, so without a way
+     * out a single interruption — a chunk unloading while a player walks off — would stop the village smelting for
+     * good, and the only cure would be a player coming to empty a furnace by hand. The old furnace keeps its
+     * contents for whoever wants them.
+     */
+    public static boolean moveFurnace(ServerLevel level, VillageData village) {
+        BlockPos abandoned = village.furnacePos();
+        if (abandoned == null || !level.isLoaded(abandoned) || !WorldPermissions.mayGrief(level, null)) {
+            return false;
         }
+        BlockPos storehouse = village.storehousePos();
+        if (storehouse == null || !level.isLoaded(storehouse)) {
+            return false;
+        }
+        // The old furnace block stays standing, so its cell is no longer free and the search cannot hand it back.
+        village.setFurnacePos(null);
+        ensure(level, village, storehouse, Blocks.FURNACE, null, village::setFurnacePos);
+        if (village.furnacePos() == null) {
+            // Nowhere else to put one. Keeping the blocked furnace is better than having none at all: a player may
+            // yet empty it, and the artisan goes on reporting it by name until somebody does.
+            village.setFurnacePos(abandoned);
+            return false;
+        }
+        return true;
     }
 
     /**
