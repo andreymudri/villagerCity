@@ -38,6 +38,12 @@ public final class WorkshopService {
     /**
      * Called on every village tick right after the storehouse check. Does nothing without a loaded storehouse or with
      * doMobGriefing off, and records no position when EntityPlaceEvent is cancelled, as {@code StorehouseService} does.
+     * <p>
+     * A crafting table is the whole workshop. The village used to place a furnace beside it, and does not any more:
+     * five review rounds of sharing a furnace with players ended in five measured ways of carrying off a player's
+     * stock, and the feature was cut rather than paid for again. A furnace an older version already placed is left
+     * exactly where it stands -- breaking a block a player may be using, to tidy the village's own bookkeeping, is
+     * the kind of thing this cut exists to avoid.
      */
     public static void ensureWorkshop(ServerLevel level, VillageData village) {
         BlockPos storehouse = village.storehousePos();
@@ -45,38 +51,6 @@ public final class WorkshopService {
             return;
         }
         ensure(level, village, storehouse, Blocks.CRAFTING_TABLE, village.craftingTablePos(), village::setCraftingTablePos);
-        ensure(level, village, storehouse, Blocks.FURNACE, village.furnacePos(), village::setFurnacePos);
-    }
-
-    /**
-     * Gives up on the furnace the village has and builds another one somewhere else, leaving the old one and
-     * everything in it exactly where they are. Returns whether the village ended up somewhere new.
-     * <p>
-     * This is what makes abandoning a batch affordable. The village never takes back what it left in a furnace it
-     * walked away from, and it refuses to start a batch in a furnace that holds anything at all, so without a way
-     * out a single interruption — a chunk unloading while a player walks off — would stop the village smelting for
-     * good, and the only cure would be a player coming to empty a furnace by hand. The old furnace keeps its
-     * contents for whoever wants them.
-     */
-    public static boolean moveFurnace(ServerLevel level, VillageData village) {
-        BlockPos abandoned = village.furnacePos();
-        if (abandoned == null || !level.isLoaded(abandoned) || !WorldPermissions.mayGrief(level, null)) {
-            return false;
-        }
-        BlockPos storehouse = village.storehousePos();
-        if (storehouse == null || !level.isLoaded(storehouse)) {
-            return false;
-        }
-        // The old furnace block stays standing, so its cell is no longer free and the search cannot hand it back.
-        village.setFurnacePos(null);
-        ensure(level, village, storehouse, Blocks.FURNACE, null, village::setFurnacePos);
-        if (village.furnacePos() == null) {
-            // Nowhere else to put one. Keeping the blocked furnace is better than having none at all: a player may
-            // yet empty it, and the artisan goes on reporting it by name until somebody does.
-            village.setFurnacePos(abandoned);
-            return false;
-        }
-        return true;
     }
 
     /**
