@@ -23,6 +23,7 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
  * A* search for a walkable route between two points, laid with steps and bridges where the ground is uneven.
@@ -136,8 +137,15 @@ public final class PathRoute {
                     // GROUND cells stand right on top of whatever the column's topmost solid block already is,
                     // untouched either way (see planCell): a foreign one (a player's cobblestone terrace, say) is a
                     // perfectly fine surface to cross, so only RAISED/CUT/BRIDGE - which do place or dig at the
-                    // support - need it to be paveable rather than a foreign obstruction (see supportBlocked).
-                    if (kind != Kind.GROUND && supportBlocked(level, surface.below())) {
+                    // support - need it to be paveable rather than a foreign obstruction (see supportBlocked). But
+                    // "whatever the topmost solid block is" must still be something a villager can actually stand
+                    // on (see standableSupport) - groundAt only asks blocksMotion(), which a fence, wall, fence gate
+                    // or cactus all satisfy despite none of them being a real, flat, safe floor.
+                    if (kind == Kind.GROUND) {
+                        if (!standableSupport(level, surface.below())) {
+                            continue;
+                        }
+                    } else if (supportBlocked(level, surface.below())) {
                         continue;
                     }
                     int cost = 1 + 2 * Math.abs(h - ground.y()) + (bridge ? 3 : 0);
@@ -241,8 +249,17 @@ public final class PathRoute {
             if (blocked(level, candidate) || blocked(level, candidate.above())) {
                 continue;
             }
-            Kind kind = kindOf(candidate.getY(), ground);
-            if (kind != Kind.GROUND && supportBlocked(level, candidate.below())) {
+            // Classified exactly as find()'s own neighbour loop does: a fluid column is always BRIDGE, whatever
+            // height happens to be asked for, never GROUND just because the two heights happen to match. Without
+            // this, a neighbour whose ground is water can be classified as a GROUND start - no planks placed, no
+            // MakePath run, nothing built - and the route begins standing in open water.
+            boolean bridge = ground.fluid() || candidate.getY() - ground.y() > MAX_ABOVE_GROUND;
+            Kind kind = bridge ? Kind.BRIDGE : kindOf(candidate.getY(), ground);
+            if (kind == Kind.GROUND) {
+                if (!standableSupport(level, candidate.below())) {
+                    continue;
+                }
+            } else if (supportBlocked(level, candidate.below())) {
                 continue;
             }
             return Optional.of(new StartPoint(candidate, kind));
@@ -270,6 +287,27 @@ public final class PathRoute {
         BlockState state = level.getBlockState(support);
         return !state.canBeReplaced() && !state.is(BlockTags.DIRT) && !state.is(Blocks.DIRT_PATH)
                 && !state.is(Blocks.OAK_PLANKS) && !DigStep.isDiggable(level, support);
+    }
+
+    /**
+     * Whether a GROUND cell's support is something a villager can actually stand on, not merely something that
+     * satisfies {@code groundAt}'s {@code blocksMotion()} check. A fence, wall, fence gate or cactus all block
+     * motion, so the heightmap and {@code groundAt} both report a walkable surface right on top of them, but none
+     * of the four is a flat, safe floor: a fence/wall/gate's collision shape reaches well above a full block, so a
+     * "surface" cell resting directly on top of one still clips into it, and a cactus is dangerous regardless of
+     * its own shape. The generic {@code VoxelShape} check below is a second, tag-independent net for the same
+     * class of problem (and, defensively, also rejects an empty/fluid shape - a support {@code find}/{@code
+     * resolveStart} should never see once the fluid-to-BRIDGE promotion has already run, but that must never be
+     * this method's job to enforce silently).
+     */
+    private static boolean standableSupport(ServerLevel level, BlockPos support) {
+        BlockState state = level.getBlockState(support);
+        if (state.is(BlockTags.FENCES) || state.is(BlockTags.WALLS) || state.is(BlockTags.FENCE_GATES)
+                || state.is(Blocks.CACTUS)) {
+            return false;
+        }
+        VoxelShape shape = state.getCollisionShape(level, support);
+        return !shape.isEmpty() && shape.max(Direction.Axis.Y) <= 1.0;
     }
 
     /**

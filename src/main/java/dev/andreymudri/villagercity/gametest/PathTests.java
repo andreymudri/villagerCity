@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
@@ -603,6 +604,121 @@ public final class PathTests {
         });
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_no_route_door", timeoutTicks = 3200)
+    public static void neverOpensTheDoorForAHouseThatCannotBeRouted(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        // The bell walled off entirely, like retriesInsteadOfAbandoningWhenThereIsNoRouteYet, but this house's own
+        // door is left ordinary and wooden - openable in principle. Opening the door before find() is even
+        // attempted (the old doorOutside) would open it here regardless of the route ever succeeding, and every
+        // retry that followed the sweep's next close would open it again, fighting the sweep forever. Deferred
+        // until a route is actually found, the door here must never open at all, since no route to this bell ever
+        // exists.
+        for (int x = 21; x <= 27; x++) {
+            for (int z = 21; z <= 27; z++) {
+                for (int y = 0; y <= 4; y++) {
+                    helper.setBlock(x, y, z, Blocks.BRICKS);
+                }
+            }
+        }
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        BuildingRecord house = placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        enrollPaver(helper, village, 12, 1, 20);
+        AtomicBoolean everOpened = new AtomicBoolean();
+        helper.onEachTick(() -> {
+            BlockState lower = helper.getBlockState(DOOR_LOWER);
+            if (lower.getBlock() instanceof DoorBlock doorBlock && doorBlock.isOpen(lower)) {
+                everOpened.set(true);
+            }
+        });
+        helper.runAfterDelay(3000, () -> {
+            helper.assertTrue(village.pathQueue().contains(house.origin()), "house was dropped from the queue instead of retried");
+            helper.assertFalse(everOpened.get(), "the door was opened even though the house was never actually routed");
+            VillageTestSupport.remove(helper, village);
+            helper.succeed();
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_door_swapped", timeoutTicks = 6000)
+    public static void neverForceClosesADoorSwappedForAnIronOneAfterOpening(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        BlockPos bell = helper.absolutePos(bellRelative);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        enrollPaver(helper, village, 12, 1, 20);
+        AtomicBoolean swapped = new AtomicBoolean();
+        AtomicBoolean everClosedAfterSwap = new AtomicBoolean();
+        helper.onEachTick(() -> {
+            BlockState lower = helper.getBlockState(DOOR_LOWER);
+            if (!swapped.get()) {
+                if (lower.getBlock() instanceof DoorBlock doorBlock && doorBlock.isOpen(lower)) {
+                    // The exact repro: a player breaks the oak door this mod opened and puts their own iron one in
+                    // its place, open, right after. Only the block-identity check in closeIfClear stops the sweep
+                    // from later force-closing it - an iron door the paver itself could never have opened - which
+                    // would otherwise contradict the very rule neverOpensAnIronDoor enforces for opening one.
+                    helper.setBlock(DOOR_LOWER, ironDoorLike(lower));
+                    helper.setBlock(DOOR_UPPER, ironDoorLike(helper.getBlockState(DOOR_UPPER)));
+                    swapped.set(true);
+                }
+                return;
+            }
+            if (lower.getBlock() instanceof DoorBlock doorBlock && !doorBlock.isOpen(lower)) {
+                everClosedAfterSwap.set(true);
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(swapped.get(), "the door was never opened, so the swap never happened");
+            helper.assertTrue(village.pathQueue().isEmpty(), "path still queued");
+            helper.assertTrue(reachedBell(village, bell), "path never reaches within 2 of the bell");
+            helper.assertFalse(everClosedAfterSwap.get(), "the iron door that replaced the oak one was force-closed by the sweep");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_door_griefing_after_open", timeoutTicks = 2000)
+    public static void keepsTrackingTheDoorInsteadOfForceClosingWhenGriefingTurnsOffAfterOpening(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        Villager villager = enrollPaver(helper, village, 12, 1, 20);
+        BlockPos farAway = helper.absolutePos(new BlockPos(2, 1, 2));
+        AtomicBoolean opened = new AtomicBoolean();
+        AtomicLong openedAtTick = new AtomicLong(-1);
+        helper.onEachTick(() -> {
+            BlockState lower = helper.getBlockState(DOOR_LOWER);
+            if (!opened.get()) {
+                if (!(lower.getBlock() instanceof DoorBlock doorBlock) || !doorBlock.isOpen(lower)) {
+                    return;
+                }
+                opened.set(true);
+                openedAtTick.set(helper.getLevel().getGameTime());
+                // Turned off right as the door opens, well before the paver could ever walk clear of it on its own:
+                // the sweep must never force it shut while griefing is disallowed, the same rule that stops this
+                // mod opening a door in the first place (see neverOpensTheDoorWithMobGriefingOff).
+                helper.getLevel().getGameRules().getRule(GameRules.RULE_MOBGRIEFING).set(false, helper.getLevel().getServer());
+            }
+            // Kept far enough, every tick from the moment it opens, that it is never once seen within
+            // DOOR_CLOSE_DISTANCE of it: only the DOOR_OPEN_TIMEOUT_TICKS safety net ever attempts to close this
+            // door, so whether that attempt actually goes through is entirely down to the mayGrief re-check.
+            villager.teleportTo(farAway.getX() + 0.5, farAway.getY(), farAway.getZ() + 0.5);
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(opened.get(), "the door was never opened by the paver");
+            helper.assertTrue(helper.getLevel().getGameTime() - openedAtTick.get() > PathWork.DOOR_OPEN_TIMEOUT_TICKS + 100,
+                    "not enough ticks have passed since the door opened for the timeout safety net to have tried closing it");
+            BlockState lower = helper.getBlockState(DOOR_LOWER);
+            helper.getLevel().getGameRules().getRule(GameRules.RULE_MOBGRIEFING).set(true, helper.getLevel().getServer());
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(lower.getBlock() instanceof DoorBlock doorBlock && doorBlock.isOpen(lower),
+                    "the door was force-closed while mobGriefing was off");
+        });
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_step_at_door", timeoutTicks = 6000)
     public static void routesOverAForeignStepUnderTheDoorstepInsteadOfLosingTheRoute(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
@@ -659,6 +775,126 @@ public final class PathTests {
                         "the stone band was crossed as a RAISED cell at " + pos.toShortString() + " instead of at ground level");
             }
             VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_fence_post", timeoutTicks = 8000)
+    public static void routeNeverStandsOnAFencePost(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // A fence line replacing the ground itself (flush, like the cobblestone band in
+        // crossesAStoneBandAtGroundLevelInsteadOfBuryingItInDirt, not sitting on top of it): blocksMotion() is true
+        // for a fence just like it is for the grass it replaces, so groundAt sees exactly the same height either
+        // way, and standing directly on top of it is the cheapest way across - the temptation a real stand-on-it
+        // check has to resist. Left short of the whole area width (unlike the cobblestone band, a fence is neither
+        // diggable nor replaceable, so a full-width line would leave no way across at all, fixed or not) so a route
+        // can still detour around its end near the bell if crossing it is refused.
+        int fenceZ = 16;
+        for (int x = 0; x < 30; x++) {
+            helper.setBlock(x, 0, fenceZ, Blocks.OAK_FENCE);
+        }
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        BlockPos bell = helper.absolutePos(bellRelative);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        ServerLevel level = helper.getLevel();
+        enrollPaver(helper, village, 12, 1, 20);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.pathQueue().isEmpty(), "path still queued");
+            helper.assertTrue(reachedBell(village, bell), "path never reaches within 2 of the bell");
+            for (BlockPos cell : village.pathCells()) {
+                helper.assertFalse(level.getBlockState(cell.below()).is(Blocks.OAK_FENCE),
+                        "path cell " + cell.toShortString() + " stands directly on a fence post");
+            }
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** The doorstep cell itself unusable (a chest on it, as in {@code neverBreaksAChestAtTheDoor}), and the first
+     * neighbour {@code resolveStart} tries (north, per its own {@code Direction.Plane.HORIZONTAL} order) turned to
+     * water at exactly the height that makes its {@code ground().y()} equal the doorstep's own height: the exact
+     * repro the finding describes. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_start_fallback_water", timeoutTicks = 100)
+    public static void startFallbackNeverStandsInOpenWater(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        helper.setBlock(DOOR_OUTSIDE, Blocks.CHEST);
+        BlockPos waterSupport = new BlockPos(DOOR_OUTSIDE.getX(), DOOR_OUTSIDE.getY() - 1, DOOR_OUTSIDE.getZ() - 1);
+        helper.setBlock(waterSupport, Blocks.WATER);
+        ServerLevel level = helper.getLevel();
+        List<PathRoute.Cell> route = PathRoute.find(level, village, helper.absolutePos(DOOR_OUTSIDE), village.center())
+                .orElseThrow(() -> new IllegalStateException("no route found"));
+        PathRoute.Cell startCell = route.get(0);
+        BlockPos expectedStart = helper.absolutePos(new BlockPos(DOOR_OUTSIDE.getX(), DOOR_OUTSIDE.getY(), DOOR_OUTSIDE.getZ() - 1));
+        // Without the fluid-to-BRIDGE promotion, this neighbour misclassifies as GROUND, gets rejected outright by
+        // standableSupport for having a fluid (no-floor) support, and resolveStart moves on to a dry neighbour
+        // instead - a different cell than the one asserted here, and never a BRIDGE.
+        helper.assertTrue(startCell.surface().equals(expectedStart),
+                "the start fallback skipped the water neighbour at " + expectedStart.toShortString() + " instead of bridging it");
+        helper.assertTrue(startCell.kind() == PathRoute.Kind.BRIDGE,
+                "the start fallback stood on the water neighbour as " + startCell.kind() + " instead of BRIDGE");
+        VillageTestSupport.remove(helper, village);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_no_route_starvation", timeoutTicks = 6000)
+    public static void doesNotStarveOtherHousesBehindAnUnroutableOne(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        BlockPos bell = helper.absolutePos(bellRelative);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        BuildingRecord houseA = placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        // House A's door swapped for iron, exactly like neverOpensAnIronDoor: no vanilla mob (and this paver) can
+        // ever open it, so house A can never be routed. The single paver below must not spend every tick retrying
+        // house A forever while house B, queued right behind it, never gets a turn.
+        helper.setBlock(DOOR_LOWER, ironDoorLike(helper.getBlockState(DOOR_LOWER)));
+        helper.setBlock(DOOR_UPPER, ironDoorLike(helper.getBlockState(DOOR_UPPER)));
+        BuildingRecord houseB = placeStarterHouse(helper, village, new BlockPos(30, 1, 8));
+        enrollPaver(helper, village, 20, 1, 20);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.pathQueue().contains(houseA.origin()),
+                    "house A was dropped from the queue instead of staying queued for a later retry");
+            helper.assertFalse(village.pathQueue().contains(houseB.origin()),
+                    "house B never got its path: house A at the head, permanently unroutable, starved it");
+            helper.assertTrue(reachedBell(village, bell), "house B's path never reaches within 2 of the bell");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_path_door_timeout", timeoutTicks = 1600)
+    public static void closesTheDoorAfterATimeoutWhenTheOpenerNeverComesNear(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        BlockPos bellRelative = new BlockPos(24, 1, 24);
+        VillageData village = VillageTestSupport.freshVillage(helper, bellRelative, 30, false);
+        stockedStorehouse(helper, village, new BlockPos(4, 1, 24));
+        placeStarterHouse(helper, village, HOUSE_ORIGIN);
+        Villager villager = enrollPaver(helper, village, 12, 1, 20);
+        BlockPos farAway = helper.absolutePos(new BlockPos(2, 1, 2));
+        AtomicBoolean opened = new AtomicBoolean();
+        helper.onEachTick(() -> {
+            BlockState lower = helper.getBlockState(DOOR_LOWER);
+            if (lower.getBlock() instanceof DoorBlock doorBlock && doorBlock.isOpen(lower)) {
+                opened.set(true);
+            }
+            if (opened.get()) {
+                // Kept far enough from the door, every single tick, that it is never once seen within
+                // DOOR_CLOSE_DISTANCE of it: only the DOOR_OPEN_TIMEOUT_TICKS safety net - not the "opener walked
+                // clear" leg, which needs everNear to have been set first - can close the door in this test, since
+                // the opener (still alive throughout) is never near it to begin with.
+                villager.teleportTo(farAway.getX() + 0.5, farAway.getY(), farAway.getZ() + 0.5);
+            }
+        });
+        helper.runAfterDelay(1400, () -> {
+            helper.assertTrue(opened.get(), "the door was never opened by the paver");
+            helper.assertTrue(villager.isAlive(), "the opener died or was discarded instead of merely staying away");
+            BlockState lower = helper.getBlockState(DOOR_LOWER);
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(lower.getBlock() instanceof DoorBlock doorBlock && !doorBlock.isOpen(lower),
+                    "the door was not closed by the timeout when its opener never came near");
+            helper.succeed();
         });
     }
 
