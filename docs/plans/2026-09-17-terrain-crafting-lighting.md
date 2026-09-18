@@ -393,6 +393,9 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
 - Create: `src/main/java/dev/andreymudri/villagercity/craft/CraftAtTable.java`
 - Create: `src/main/java/dev/andreymudri/villagercity/craft/SmeltInFurnace.java`
 - Create: `src/main/java/dev/andreymudri/villagercity/craft/VillageDemand.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageData.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageWorks.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageCodecs.java`
 - Create: `src/main/java/dev/andreymudri/villagercity/gametest/ArtisanTests.java`
 
 **Depends:** T1, T6
@@ -435,6 +438,38 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
 
     With a builder and an artisan, succeed when `houseCount() == 1` (timeout 24000).
   - `respectsMobGriefingForTheWorkshop`.
+- [ ] **Step 8: the village remembers what it left in the furnace.**
+
+  The village shares the furnace with players, and nothing in a furnace slot says who put an item there. Without a
+  record, resuming a batch an interrupted trip left behind and refusing to take a player's items are the same
+  operation, so one cannot be fixed without breaking the other. The record is what separates them.
+
+  - `VillageWorks` gains `Optional<FurnaceClaim> furnaceClaim`, with `record FurnaceClaim(Item input, int inputCount,
+    Item fuel, int fuelCount, Item output, int outputCount)` and a codec. `VillageData` gains `furnaceClaim()`,
+    `setFurnaceClaim(...)` and `clearFurnaceClaim()`; `VillageCodecs` saves it, defaulting to empty so old saves load.
+  - The artisan records the claim when it hands items to the furnace, and clears it when it takes the output back.
+    The claim is the village's receipt: it survives a reload, a night, and the death of the villager holding it.
+  - **Resuming.** A recorded claim is resumed on the next trip whatever the storehouse holds, because the trip that
+    left it is the reason the storehouse is empty. The resume must not be gated on `storehouseHolds(step.inputs())`.
+  - **What may be taken.** The village claims at most `outputCount` from the result slot, and only the amount above
+    whatever the slot held when the claim was made. Output beyond the claim belongs to whoever put it there and is
+    never taken, never counted as this batch's progress, and never deposited into the storehouse.
+  - **A foreign slot is a reported blocker, not a deadlock.** Input, fuel or result holding something the claim does
+    not cover leaves the furnace untouched and sets `waitingFor` to a message naming the position, the slot and the
+    item, so a player reading `/villagercity village` knows what to remove. No path may busy-loop: a blocked furnace
+    must not re-plan the same doomed trip every scheduler tick.
+  - **Arithmetic.** Every slot top-up is capped at that slot's stack limit (`AbstractFurnaceBlockEntity.setItem`
+    silently truncates above it, destroying the excess the villager already paid). A top-up preserves the
+    `DataComponents` of the stack already in the slot rather than replacing it with a plain one.
+- [ ] **Step 9: tests for the claim.** In `ArtisanTests`, each in its own `vc_` batch:
+  - a trip interrupted mid-smelt (the villager teleported out of reach, as a night does) is resumed on the next trip
+    and the order completes, with the storehouse empty of the input;
+  - a player's output left in the result slot is still there afterwards, and the storehouse never gains it, over
+    repeated orders rather than a single trip;
+  - a fuel the storehouse cannot match, alone in the fuel slot, is reported by name and does not stop the village
+    from smelting once removed;
+  - a fuel top-up that would exceed a stack is capped and the villager keeps the remainder;
+  - a claim round-trips through the village codec, and an old save with no claim loads.
 - [ ] **Step 7: verify and commit.** Build and GameTests green. Commit: `feat: the artisan crafts and smelts what the village is short of at a workshop by the storehouse`.
 
 ### Task 8: README, handoff notes and a village-wide end-to-end check
