@@ -34,6 +34,7 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.GameRules;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity;
 
@@ -108,7 +109,11 @@ public final class ArtisanJob implements Job {
                 storehouse.counts(), demand.orders(), demand.reserved());
         village.setArtisanOrders(demand.orders().stream().map(order -> path(order.getKey()) + " x" + order.getValue()).toList());
         if (result.steps().isEmpty()) {
-            waitingFor = result.unmet().isEmpty() ? "no orders" : "materials: " + shortfall(result);
+            // A blocked claim outranks having nothing to do. It is exactly when the storehouse is empty that the
+            // village most needs to be told its own stock is stuck in the furnace: "materials: sand" sends a player
+            // looking for sand, and the sand is already in the furnace they would have to clear to get it back.
+            waitingFor = claimBlocked != null ? claimBlocked
+                    : result.unmet().isEmpty() ? "no orders" : "materials: " + shortfall(result);
             return null;
         }
         // The first step the artisan can actually run today, not simply the first one planned: a smelt it cannot do
@@ -128,6 +133,9 @@ public final class ArtisanJob implements Job {
                 continue;
             }
             String why = furnaceBlockedBy(level, furnace, step);
+            if (why == null) {
+                why = fuelSlotBlockedBy(level, furnace, storehouse, spokenFor(demand, step), step);
+            }
             if (why == null) {
                 why = tooLateToSmelt(level, ctx.villager(), step.times());
             }
@@ -154,9 +162,9 @@ public final class ArtisanJob implements Job {
 
     /**
      * What stops a new batch from going into the village furnace, or null when nothing does. A claim may only be
-     * opened on a furnace whose three slots are all empty: that is what makes everything the result slot gains this
-     * batch's own output, and it is why a single foreign item anywhere in the furnace is reported to the player
-     * rather than worked around. Reporting costs the village nothing, because the step loop moves on to other orders.
+     * opened on a furnace whose input and result slots are empty: that is what makes everything the result slot gains
+     * this batch's own output, and it is why a single foreign item in either is reported to the player rather than
+     * worked around. Reporting costs the village nothing, because the step loop moves on to other orders.
      */
     private static @Nullable String furnaceBlockedBy(ServerLevel level, BlockPos furnace, CraftStep step) {
         if (step.inputs().size() != 1) {
@@ -165,7 +173,7 @@ public final class ArtisanJob implements Job {
         if (!(level.getBlockEntity(furnace) instanceof AbstractFurnaceBlockEntity entity)) {
             return "a furnace by the storehouse";
         }
-        for (int slot : new int[] {SmeltInFurnace.SLOT_INPUT, SmeltInFurnace.SLOT_FUEL, SmeltInFurnace.SLOT_RESULT}) {
+        for (int slot : new int[] {SmeltInFurnace.SLOT_INPUT, SmeltInFurnace.SLOT_RESULT}) {
             ItemStack held = entity.getItem(slot);
             if (!held.isEmpty()) {
                 return occupied(furnace, SmeltInFurnace.SLOT_NAMES[slot] + " slot holding " + path(held.getItem()));
@@ -175,11 +183,39 @@ public final class ArtisanJob implements Job {
     }
 
     /**
+     * Why whatever is already in the fuel slot stops this batch, or null when it does not. The village never empties
+     * that slot — see {@link SmeltInFurnace#finish} — so a batch either burns what is in there or does not start: it
+     * burns it when it is a fuel and the storehouse can cover whatever more the batch needs, and otherwise the slot
+     * and its contents are reported by name and left alone.
+     */
+    private static @Nullable String fuelSlotBlockedBy(ServerLevel level, BlockPos furnace, StorehouseBlockEntity storehouse,
+                                                      Map<Item, Integer> spokenFor, CraftStep step) {
+        if (!(level.getBlockEntity(furnace) instanceof AbstractFurnaceBlockEntity entity)) {
+            return null;
+        }
+        ItemStack held = entity.getItem(SmeltInFurnace.SLOT_FUEL);
+        return held.isEmpty() || fuelAlreadyIn(storehouse, spokenFor, step.times(), held) != null ? null
+                : occupied(furnace, SmeltInFurnace.SLOT_NAMES[SmeltInFurnace.SLOT_FUEL] + " slot holding " + path(held.getItem()));
+    }
+
+    /** The batch's own inputs on top of what the other jobs are already counted on having. */
+    private static Map<Item, Integer> spokenFor(VillageDemand.Demand demand, CraftStep step) {
+        Map<Item, Integer> claimed = new LinkedHashMap<>(demand.reserved());
+        step.inputs().forEach((item, amount) -> claimed.merge(item, amount, Integer::sum));
+        return claimed;
+    }
+
+    /**
      * Why this batch should not be started now, or null when there is day enough for it. A batch left half-done in a
      * shared furnace is the whole problem this class works to recover from, and a villager that walks off to bed
      * mid-smelt leaves exactly that. Sitting the batch out until morning costs the village one idle evening.
      */
     private static @Nullable String tooLateToSmelt(ServerLevel level, Villager villager, int items) {
+        if (!level.getGameRules().getBoolean(GameRules.RULE_DAYLIGHT)) {
+            // The clock is frozen: whatever hour it stopped at, the villager's schedule will never reach rest and
+            // the batch has all the time there is. Refusing here would idle the artisan for the rest of the world.
+            return null;
+        }
         int needed = items * SmeltInFurnace.TICKS_PER_ITEM + SmeltInFurnace.EXTRA_TICKS + TRAVEL_ALLOWANCE_TICKS;
         return ticksUntilRest(level, villager) >= needed ? null : "daylight enough to finish a batch in the furnace";
     }
@@ -231,9 +267,7 @@ public final class ArtisanJob implements Job {
             return null;
         }
         Map.Entry<Item, Integer> input = step.inputs().entrySet().iterator().next();
-        Map<Item, Integer> spokenFor = new LinkedHashMap<>(demand.reserved());
-        step.inputs().forEach((item, amount) -> spokenFor.merge(item, amount, Integer::sum));
-        Map.Entry<Item, Integer> fuel = chooseFuel(storehouse, spokenFor, step.times());
+        Map.Entry<Item, Integer> fuel = chooseFuel(storehouse, spokenFor(demand, step), step.times(), entity);
         if (fuel == null) {
             return null;
         }
@@ -280,11 +314,16 @@ public final class ArtisanJob implements Job {
      * {@link SmeltInFurnace#TICKS_PER_ITEM} each. Stock another job is counted on, and the batch's own input, are not
      * spare; a fuel the village cannot spare enough of is skipped rather than half-loaded. Null when none qualifies.
      * <p>
-     * The furnace's own fuel slot has no say here: a claim only opens on an empty furnace, so there is never anything
-     * in it to work around, and one stray item can no longer decide what the village is allowed to burn.
+     * Fuel already in the slot settles the choice by itself, because the village will not empty that slot to make
+     * room for a fuel it likes better.
      */
     private static @Nullable Map.Entry<Item, Integer> chooseFuel(StorehouseBlockEntity storehouse,
-                                                                 Map<Item, Integer> claimed, int items) {
+                                                                 Map<Item, Integer> claimed, int items,
+                                                                 AbstractFurnaceBlockEntity entity) {
+        ItemStack burning = entity.getItem(SmeltInFurnace.SLOT_FUEL);
+        if (!burning.isEmpty()) {
+            return fuelAlreadyIn(storehouse, claimed, items, burning);
+        }
         Map<Item, Integer> burnTimes = AbstractFurnaceBlockEntity.getFuel();
         Item best = null;
         long bestSpare = 0;
@@ -306,6 +345,26 @@ public final class ArtisanJob implements Job {
             }
         }
         return best == null ? null : Map.entry(best, bestCount);
+    }
+
+    /**
+     * The claim to write for a batch that has to burn what is already in the fuel slot, or null when it cannot: the
+     * slot holds something that does not burn, or burns for too little and the storehouse cannot spare the rest.
+     * <p>
+     * The claim covers everything in the slot, not just the part the village paid for. It has to: the receipt is
+     * what says the furnace holds nothing foreign, and a claim that covered less than the slot already held would
+     * read as foreign the moment it was written, stranding the batch it just started.
+     */
+    private static @Nullable Map.Entry<Item, Integer> fuelAlreadyIn(StorehouseBlockEntity storehouse,
+                                                                    Map<Item, Integer> claimed, int items, ItemStack burning) {
+        int burnTime = burnTime(burning.getItem());
+        if (burnTime <= 0) {
+            return null;
+        }
+        int needed = Mth.ceil(items * (double) SmeltInFurnace.TICKS_PER_ITEM / burnTime);
+        long spare = storehouse.count(burning.getItem()) - claimed.getOrDefault(burning.getItem(), 0);
+        return spare < needed - burning.getCount() ? null
+                : Map.entry(burning.getItem(), Math.max(needed, burning.getCount()));
     }
 
     /** Charcoal and coal first, then every log and every plank, each tag sorted by item id so ties break the same way twice. */

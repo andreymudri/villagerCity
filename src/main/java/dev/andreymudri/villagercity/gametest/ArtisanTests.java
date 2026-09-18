@@ -102,6 +102,16 @@ public final class ArtisanTests {
         furnace.setChanged();
     }
 
+    /** Turns the world clock on or off; {@code prepareArea} leaves it off, so a test about dusk has to ask for it. */
+    private static void setDaylightCycle(GameTestHelper helper, boolean running) {
+        helper.getLevel().getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(running, helper.getLevel().getServer());
+    }
+
+    /** Whether the villager has this item in hand: the trip is planned and under way, not merely decided on. */
+    private static boolean carrying(Villager villager, Item item) {
+        return Inventories.count(villager.getInventory(), stack -> stack.is(item)) > 0;
+    }
+
     /** What the village furnace holds in a slot right now, or an empty stack when there is no furnace. */
     private static ItemStack furnaceSlot(GameTestHelper helper, VillageData village, int slot) {
         AbstractFurnaceBlockEntity furnace = furnaceOf(helper, village);
@@ -558,14 +568,14 @@ public final class ArtisanTests {
         BuilderTests.stockedStorehouse(helper, village, Map.of());
         WorkshopService.ensureWorkshop(helper.getLevel(), village);
         BlockPos furnace = village.furnacePos();
-        seedFurnace(helper, village, SmeltInFurnace.SLOT_FUEL, new ItemStack(Items.BAMBOO, 1));
         // Diamond is the input on purpose: nothing smelts it, so the furnace never lights and the fuel slot holds
         // exactly what the top-up put there. With a real smeltable the fuel burns down while the count is read.
         FurnaceClaim claim = new FurnaceClaim(Items.DIAMOND, 4, Items.BAMBOO, 80, Items.DIAMOND_BLOCK, 4);
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_INPUT, new ItemStack(Items.DIAMOND, 4));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_FUEL, new ItemStack(Items.BAMBOO, 1));
         village.setFurnaceClaim(claim);
         Villager villager = artisanRunning(helper, village, relative(helper, furnace).getX() + 1, relative(helper, furnace).getZ(),
                 new ScriptedJob(new SmeltInFurnace(furnace, claim)));
-        villager.getInventory().addItem(new ItemStack(Items.DIAMOND, 4));
         villager.getInventory().addItem(new ItemStack(Items.BAMBOO, 64));
         villager.getInventory().addItem(new ItemStack(Items.BAMBOO, 15));
 
@@ -574,8 +584,74 @@ public final class ArtisanTests {
             int carried = Inventories.count(villager.getInventory(), stack -> stack.is(Items.BAMBOO));
             VillageTestSupport.remove(helper, village);
             helper.assertTrue(inSlot + carried == 80, "bamboo was destroyed: " + inSlot + " in the slot plus " + carried
-                    + " carried, from the 80 the villager paid for");
+                    + " carried, from the 79 the villager paid for and the one already in the slot");
             helper.assertTrue(inSlot == 64, "the fuel slot holds " + inSlot + ", not the stack it was capped to");
+            helper.succeed();
+        });
+    }
+
+    /**
+     * A top-up is what the slot is short of, not what the claim says in total. The batch is already burning two of
+     * its six planks, so four go in and the villager keeps the rest; without the subtraction it hands over all six,
+     * two of them beyond the receipt, and they can never come back out again.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_fuel_subtraction", timeoutTicks = 400)
+    public static void aFuelTopUpCountsWhatTheSlotAlreadyHolds(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        BuilderTests.stockedStorehouse(helper, village, Map.of());
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        BlockPos furnace = village.furnacePos();
+        // Diamond again, so the planks sit in the slot to be counted instead of burning while the test reads them.
+        FurnaceClaim claim = new FurnaceClaim(Items.DIAMOND, 6, Items.OAK_PLANKS, 6, Items.DIAMOND_BLOCK, 6);
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_INPUT, new ItemStack(Items.DIAMOND, 6));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_FUEL, new ItemStack(Items.OAK_PLANKS, 2));
+        village.setFurnaceClaim(claim);
+        Villager villager = artisanRunning(helper, village, relative(helper, furnace).getX() + 1, relative(helper, furnace).getZ(),
+                new ScriptedJob(new SmeltInFurnace(furnace, claim)));
+        villager.getInventory().addItem(new ItemStack(Items.OAK_PLANKS, 6));
+
+        helper.runAfterDelay(80, () -> {
+            int inSlot = furnaceSlot(helper, village, SmeltInFurnace.SLOT_FUEL).getCount();
+            int carried = Inventories.count(villager.getInventory(), stack -> stack.is(Items.OAK_PLANKS));
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(inSlot == 6, "the fuel slot holds " + inSlot + " planks, not the 6 the receipt covers");
+            helper.assertTrue(carried == 2, "the villager handed over " + (6 - carried) + " planks for a slot that was"
+                    + " four short, so " + (4 - carried) + " of them are beyond the receipt for good");
+            helper.succeed();
+        });
+    }
+
+    /**
+     * Fuel the village hands a shared furnace is spent. Whatever is left in that slot when the batch is settled is the
+     * same item with the same count as a player's, so the village walks away from it rather than take a stranger's
+     * coal along with its own.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_fuel_spent", timeoutTicks = 400)
+    public static void fuelLeftInTheFurnaceIsNeverCarriedOff(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of());
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        BlockPos furnace = village.furnacePos();
+        // The batch is done -- output waiting, nothing left to smelt -- with four coal of its own still in the slot.
+        FurnaceClaim claim = new FurnaceClaim(Items.SAND, 2, Items.COAL, 4, Items.GLASS, 2);
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_FUEL, new ItemStack(Items.COAL, 4));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_RESULT, new ItemStack(Items.GLASS, 2));
+        village.setFurnaceClaim(claim);
+        Villager villager = artisanRunning(helper, village, relative(helper, furnace).getX() + 1, relative(helper, furnace).getZ(),
+                new ScriptedJob(new SmeltInFurnace(furnace, claim)));
+
+        helper.runAfterDelay(60, () -> {
+            int fuelLeft = furnaceSlot(helper, village, SmeltInFurnace.SLOT_FUEL).getCount();
+            int carriedCoal = Inventories.count(villager.getInventory(), stack -> stack.is(Items.COAL));
+            int carriedGlass = Inventories.count(villager.getInventory(), stack -> stack.is(Items.GLASS));
+            long bankedCoal = storehouse.count(Items.COAL);
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(carriedGlass == 2, "the batch's own output was not collected: " + carriedGlass + " glass of 2");
+            helper.assertTrue(fuelLeft == 4, "the fuel slot went from 4 coal to " + fuelLeft);
+            helper.assertTrue(carriedCoal == 0 && bankedCoal == 0, "the village emptied the fuel slot: " + carriedCoal
+                    + " coal carried, " + bankedCoal + " banked");
             helper.succeed();
         });
     }
@@ -638,7 +714,11 @@ public final class ArtisanTests {
             VillageTestSupport.remove(helper, village);
             helper.assertTrue(banked == 0, "the village banked " + banked + " glass it never smelted");
             helper.assertTrue(left == 64, "the player's stack went from 64 to " + left);
-            helper.assertTrue(waiting != null, "a blocked furnace must be reported, but the artisan is waiting for null");
+            // The storehouse holds no sand, so there is no step to plan and nothing else to report. That is exactly
+            // when the blocked furnace has to be named: the sand the village is short of is inside it.
+            helper.assertTrue(waiting != null && waiting.contains("furnace") && waiting.contains("result")
+                            && waiting.contains("glass"),
+                    "the blocked furnace must be named by slot and item, but the artisan is waiting for " + waiting);
             helper.succeed();
         });
     }
@@ -668,7 +748,8 @@ public final class ArtisanTests {
             VillageTestSupport.remove(helper, village);
             helper.assertTrue(glass == 0 && sand == 0,
                     "the village helped itself to a player's smelt: glass " + glass + ", sand " + sand);
-            helper.assertTrue(waiting != null, "a furnace in use must be reported, but the artisan is waiting for null");
+            helper.assertTrue(waiting != null && waiting.contains("furnace"),
+                    "a furnace in use must be reported even with no step left to plan, but the artisan is waiting for " + waiting);
             helper.succeed();
         });
     }
@@ -739,12 +820,20 @@ public final class ArtisanTests {
             VillageTestSupport.remove(helper, village);
             helper.assertTrue(sand == 0, "the village walked off with " + sand + " of the player's raw sand");
             helper.assertTrue(left == 8, "the player's input slot went from 8 to " + left);
-            helper.assertTrue(waiting != null, "a furnace holding a player's stock must be reported, not silently skipped");
+            helper.assertTrue(waiting != null && waiting.contains("furnace") && waiting.contains("input")
+                            && waiting.contains("sand"),
+                    "a furnace holding a player's stock must be named by slot and item, not silently skipped: " + waiting);
             helper.succeed();
         });
     }
 
-    /** A furnace a player starts using while the villager is still walking to it is not adopted on arrival. */
+    /**
+     * A furnace a player starts using while the villager is already walking to it is not adopted on arrival. The
+     * player's sand is the same item the village was about to load and half its batch, so the receipt covers it and
+     * there is still room for the village's own on top: nothing but the rule that a claim opens on an empty input
+     * slot refuses it, and that has to be checked on arrival, because the plan that passed back at the storehouse
+     * was made before the player touched anything.
+     */
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_walk_window_smelt", timeoutTicks = 1600)
     public static void aFurnaceFilledDuringTheWalkIsNotAdopted(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
@@ -754,14 +843,16 @@ public final class ArtisanTests {
         village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
         plotShortOf(helper, village, blueprint, Blocks.GLASS);
         WorkshopService.ensureWorkshop(helper.getLevel(), village);
-        ArtisanJob job = artisan(helper, village, 22, 22);
+        ArtisanJob job = new ArtisanJob();
+        Villager villager = artisanRunning(helper, village, 22, 22, job);
 
-        // The player's own smelt goes on the moment the artisan has decided to use the furnace, while it is walking.
         AtomicBoolean filled = new AtomicBoolean();
         AtomicBoolean adopted = new AtomicBoolean();
         helper.onEachTick(() -> {
-            if (!filled.get() && !village.artisanOrders().isEmpty()) {
-                seedFurnace(helper, village, SmeltInFurnace.SLOT_INPUT, new ItemStack(Items.SAND, 2));
+            // Not merely once there are orders: once the sand is in the villager's hands. By then the trip is
+            // planned and walking, so nothing but the check made at the furnace itself is left to catch this.
+            if (!filled.get() && carrying(villager, Items.SAND)) {
+                seedFurnace(helper, village, SmeltInFurnace.SLOT_INPUT, new ItemStack(Items.SAND, 1));
                 seedFurnace(helper, village, SmeltInFurnace.SLOT_FUEL, new ItemStack(Items.COAL, 1));
                 filled.set(true);
             }
@@ -773,15 +864,25 @@ public final class ArtisanTests {
             boolean ran = filled.get();
             boolean claimed = adopted.get();
             long banked = storehouse.count(Items.GLASS);
+            // The player's own coal smelts their own sand while the village stands off, so their one item is in the
+            // furnace either as sand or as glass; what matters is that it is still theirs and still in there.
+            int left = furnaceSlot(helper, village, SmeltInFurnace.SLOT_INPUT).getCount()
+                    + furnaceSlot(helper, village, SmeltInFurnace.SLOT_RESULT).getCount();
             VillageTestSupport.remove(helper, village);
-            helper.assertTrue(ran, "the player never got to fill the furnace");
+            helper.assertTrue(ran, "the villager never set off carrying the batch");
             helper.assertFalse(claimed, "a claim was opened on the player's smelt, waiting for " + job.waitingFor());
             helper.assertTrue(banked == 0, "the village banked " + banked + " glass smelted from a player's own sand and coal");
+            helper.assertTrue(left == 1, "the player's one item went from 1 to " + left + " across the furnace");
             helper.succeed();
         });
     }
 
-    /** Output a player drops in while the villager is still walking is not counted as the batch's own. */
+    /**
+     * Output a player drops in while the villager is already walking is not counted as the batch's own, even when it
+     * is exactly the item the batch was going to produce and well inside what it was going to produce of it. One
+     * glass is within every bound a receipt for two glass has, and leaves the village something to hand over as
+     * well; the only thing that refuses it is the empty result slot a claim opens on.
+     */
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_walk_window_output", timeoutTicks = 1600)
     public static void outputDroppedInDuringTheWalkIsNotAdopted(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
@@ -791,31 +892,39 @@ public final class ArtisanTests {
         village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
         plotShortOf(helper, village, blueprint, Blocks.GLASS);
         WorkshopService.ensureWorkshop(helper.getLevel(), village);
-        ArtisanJob job = artisan(helper, village, 22, 22);
+        ArtisanJob job = new ArtisanJob();
+        Villager villager = artisanRunning(helper, village, 22, 22, job);
 
         AtomicBoolean dropped = new AtomicBoolean();
+        AtomicBoolean adopted = new AtomicBoolean();
         helper.onEachTick(() -> {
-            if (!dropped.get() && !village.artisanOrders().isEmpty()) {
-                seedFurnace(helper, village, SmeltInFurnace.SLOT_RESULT, new ItemStack(Items.GLASS, 20));
+            if (!dropped.get() && carrying(villager, Items.SAND)) {
+                seedFurnace(helper, village, SmeltInFurnace.SLOT_RESULT, new ItemStack(Items.GLASS, 1));
                 dropped.set(true);
+            }
+            if (dropped.get() && village.furnaceClaim() != null) {
+                adopted.set(true);
             }
         });
         helper.runAfterDelay(1200, () -> {
             boolean ran = dropped.get();
+            boolean claimed = adopted.get();
             long banked = storehouse.count(Items.GLASS);
             int left = furnaceSlot(helper, village, SmeltInFurnace.SLOT_RESULT).getCount();
             VillageTestSupport.remove(helper, village);
-            helper.assertTrue(ran, "the player never got to drop anything in");
+            helper.assertTrue(ran, "the villager never set off carrying the batch");
+            helper.assertFalse(claimed, "a claim was opened over the player's glass, waiting for " + job.waitingFor());
             helper.assertTrue(banked == 0, "the village banked " + banked + " of the player's glass, waiting for " + job.waitingFor());
-            helper.assertTrue(left == 20, "the player's result slot went from 20 to " + left);
+            helper.assertTrue(left == 1, "the player's result slot went from 1 to " + left);
             helper.succeed();
         });
     }
 
     /**
      * The state a night leaves when the batch finished while nobody was ticking the task: claim open, nothing left to
-     * smelt, output waiting. The village must collect it, leave no fuel of its own behind, and go on smelting -- fuel
-     * abandoned in the slot is what would lock it out of its own furnace for good.
+     * smelt, output waiting, and the batch's own coal still in the fuel slot. The village collects the output, leaves
+     * the coal exactly where it is, and smelts again anyway -- burning what is in the slot rather than emptying it is
+     * what keeps the village from being locked out of its own furnace by fuel it will never take back.
      */
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_no_lockout", timeoutTicks = 2400)
     public static void theVillageNeverLocksItselfOutOfItsOwnFurnace(GameTestHelper helper) {
@@ -827,6 +936,7 @@ public final class ArtisanTests {
         plotShortOf(helper, village, blueprint, Blocks.GLASS);
         WorkshopService.ensureWorkshop(helper.getLevel(), village);
         village.setFurnaceClaim(new FurnaceClaim(Items.SAND, 2, Items.COAL, 1, Items.GLASS, 2));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_FUEL, new ItemStack(Items.COAL, 1));
         seedFurnace(helper, village, SmeltInFurnace.SLOT_RESULT, new ItemStack(Items.GLASS, 2));
         ArtisanJob job = artisan(helper, village, 22, 22);
 
@@ -889,12 +999,17 @@ public final class ArtisanTests {
         village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
         plotShortOf(helper, village, blueprint, Blocks.GLASS);
         WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        ArtisanJob job = artisan(helper, village, 22, 22);
+        // Nothing may sit between changing the clock and the callback that puts it back: an assertion thrown in
+        // between would leave every later test in this run running at dusk.
+        boolean cycled = helper.getLevel().getGameRules().getBoolean(GameRules.RULE_DAYLIGHT);
+        setDaylightCycle(helper, true);
         // Two hundred ticks short of the villager's rest, against a batch that needs nine hundred.
         helper.getLevel().setDayTime(EVENING);
-        ArtisanJob job = artisan(helper, village, 22, 22);
 
         helper.runAfterDelay(300, () -> {
             helper.getLevel().setDayTime(GameTestSupport.DAY_TIME);
+            setDaylightCycle(helper, cycled);
             String waiting = job.waitingFor();
             boolean claimed = village.furnaceClaim() != null;
             long sand = storehouse.count(Items.SAND);
@@ -909,13 +1024,277 @@ public final class ArtisanTests {
         });
     }
 
+    /**
+     * A clock that is not running is not an evening. With {@code doDaylightCycle} off the villager's schedule stays
+     * where it is for ever, so refusing to smelt because rest is close by would idle the artisan for the rest of the
+     * world rather than for one evening.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_frozen_clock", timeoutTicks = 2400)
+    public static void aFrozenClockIsNoReasonToRefuseABatch(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.SAND, 2, Items.COAL, 4));
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, Blocks.GLASS);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        artisan(helper, village, 22, 22);
+        // The same dusk as the test above, with the clock stopped: it will still be dusk in a thousand ticks.
+        setDaylightCycle(helper, false);
+        helper.getLevel().setDayTime(EVENING);
+
+        // A fixed wait, not succeedWhen: the clock has to stay at dusk for the whole trip, and putting it back is
+        // exactly what a per-tick callback would do on its first tick.
+        helper.runAfterDelay(2000, () -> {
+            helper.getLevel().setDayTime(GameTestSupport.DAY_TIME);
+            long glass = storehouse.count(Items.GLASS);
+            FurnaceClaim claim = village.furnaceClaim();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(glass >= 2, "the artisan sat out a night that will never come: glass " + glass
+                    + ", claim " + claim);
+            helper.succeed();
+        });
+    }
+
+    /**
+     * A batch that is no longer in the furnace is written off, and nothing is ever taken for it. A hopper under the
+     * furnace empties the result slot as fast as it fills, with nobody doing anything wrong, and a receipt still open
+     * over an empty furnace would make the next thing to appear in it the village's by arithmetic alone.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_write_off", timeoutTicks = 2400)
+    public static void aBatchThatVanishedFromTheFurnaceIsWrittenOff(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.SAND, 2, Items.COAL, 4));
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, Blocks.GLASS);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        AtomicBoolean drained = new AtomicBoolean();
+        AtomicBoolean dropped = new AtomicBoolean();
+        AtomicLong since = new AtomicLong();
+        helper.onEachTick(() -> {
+            if (!drained.get() && village.furnaceClaim() != null) {
+                // The hopper takes everything, batch and fuel alike, the moment the receipt is written.
+                seedFurnace(helper, village, SmeltInFurnace.SLOT_INPUT, ItemStack.EMPTY);
+                seedFurnace(helper, village, SmeltInFurnace.SLOT_FUEL, ItemStack.EMPTY);
+                seedFurnace(helper, village, SmeltInFurnace.SLOT_RESULT, ItemStack.EMPTY);
+                drained.set(true);
+                return;
+            }
+            // Ten ticks later, whatever the village made of that, a player smelts two glass of their own in it.
+            if (drained.get() && !dropped.get() && since.incrementAndGet() > 10) {
+                seedFurnace(helper, village, SmeltInFurnace.SLOT_RESULT, new ItemStack(Items.GLASS, 2));
+                dropped.set(true);
+            }
+        });
+        helper.runAfterDelay(2000, () -> {
+            boolean ran = drained.get() && dropped.get();
+            long banked = storehouse.count(Items.GLASS);
+            int left = furnaceSlot(helper, village, SmeltInFurnace.SLOT_RESULT).getCount();
+            FurnaceClaim claim = village.furnaceClaim();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(ran, "the sequence never happened: drained " + drained.get() + ", dropped " + dropped.get());
+            helper.assertTrue(claim == null, "the receipt outlived the batch it was written for: " + claim);
+            helper.assertTrue(banked == 0, "the village banked " + banked + " of the player's glass against a batch a"
+                    + " hopper had already taken, waiting for " + job.waitingFor());
+            helper.assertTrue(left == 2, "the player's result slot went from 2 to " + left);
+            helper.succeed();
+        });
+    }
+
+    /**
+     * A receipt is a budget spent over the batch's life, not a licence refreshed by whatever the furnace holds now.
+     * Seven of these eight have already been carried off, so one is all that is left to claim -- and a result slot
+     * holding eight is therefore holding somebody else's, however exactly it matches the receipt's own item.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_budget", timeoutTicks = 1200)
+    public static void aReceiptPaysOutOnlyWhatItStillOwes(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.COAL, 4));
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, Blocks.GLASS);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        village.setFurnaceClaim(new FurnaceClaim(Items.SAND, 8, Items.COAL, 1, Items.GLASS, 8, 7));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_RESULT, new ItemStack(Items.GLASS, 8));
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        helper.runAfterDelay(900, () -> {
+            long banked = storehouse.count(Items.GLASS);
+            int left = furnaceSlot(helper, village, SmeltInFurnace.SLOT_RESULT).getCount();
+            String waiting = job.waitingFor();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(banked == 0, "the village was paid " + banked + " glass on a receipt with one left to pay");
+            helper.assertTrue(left == 8, "the player's result slot went from 8 to " + left);
+            helper.assertTrue(waiting != null && waiting.contains("furnace"),
+                    "a receipt that no longer covers the furnace must be reported, but the artisan is waiting for " + waiting);
+            helper.succeed();
+        });
+    }
+
+    /**
+     * When the input and the output together come to more than the batch can account for, the slot that is named is
+     * the one actually carrying the excess. A message is load-bearing here: a player who clears the slot the village
+     * pointed at has done what was asked, and pointing at the wrong one talks them into emptying stock of their own
+     * until what is left fits the receipt.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_excess_slot", timeoutTicks = 1200)
+    public static void theSlotHoldingTheExcessIsTheOneReported(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        BuilderTests.stockedStorehouse(helper, village, Map.of(Items.COAL, 4));
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, Blocks.GLASS);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        // A cold furnace, so nothing moves between slots while the message is read. Four sand and two glass is six
+        // items of a four-item batch: two too many, and the two are in the input slot.
+        village.setFurnaceClaim(new FurnaceClaim(Items.SAND, 4, Items.COAL, 1, Items.GLASS, 4));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_INPUT, new ItemStack(Items.SAND, 4));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_RESULT, new ItemStack(Items.GLASS, 2));
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        helper.runAfterDelay(400, () -> {
+            String waiting = job.waitingFor();
+            int sand = furnaceSlot(helper, village, SmeltInFurnace.SLOT_INPUT).getCount();
+            int glass = furnaceSlot(helper, village, SmeltInFurnace.SLOT_RESULT).getCount();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(sand == 4 && glass == 2, "the furnace was touched: input " + sand + ", result " + glass);
+            helper.assertTrue(waiting != null && waiting.contains("input") && waiting.contains("sand"),
+                    "the excess is in the input slot, but the artisan is waiting for " + waiting);
+            helper.assertFalse(waiting.contains("result"), "the result slot was blamed for the input slot's excess: " + waiting);
+            helper.succeed();
+        });
+    }
+
+    /**
+     * A slot holding something else entirely is foreign whatever the counts say. Without the item check the village
+     * tops the slot up as if it were its own, and a growing stack keeps the item that was already there: the player's
+     * cobblestone would swallow the village's sand.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_wrong_item", timeoutTicks = 1200)
+    public static void anotherItemInTheSlotIsForeignWhateverTheCount(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.SAND, 4, Items.COAL, 4));
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, Blocks.GLASS);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        // One cobblestone, well inside a four-item receipt by count alone, in a cold furnace that cannot smelt it.
+        village.setFurnaceClaim(new FurnaceClaim(Items.SAND, 4, Items.COAL, 1, Items.GLASS, 4));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_INPUT, new ItemStack(Items.COBBLESTONE, 1));
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        helper.runAfterDelay(600, () -> {
+            ItemStack slot = furnaceSlot(helper, village, SmeltInFurnace.SLOT_INPUT);
+            long sand = storehouse.count(Items.SAND);
+            String waiting = job.waitingFor();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(slot.is(Items.COBBLESTONE) && slot.getCount() == 1,
+                    "the player's cobblestone was topped up as if it were the batch: " + slot);
+            helper.assertTrue(sand == 4, "sand went into a furnace holding somebody else's stock: " + sand + " of 4 left");
+            helper.assertTrue(waiting != null && waiting.contains("cobblestone"),
+                    "the foreign item must be named, but the artisan is waiting for " + waiting);
+            helper.succeed();
+        });
+    }
+
+    /**
+     * The fuel slot is checked against the receipt like every other: a slot holding more fuel than the receipt paid
+     * for is holding somebody else's, and a batch is not resumed over it. The village will not take the coal back
+     * either way, but it must not go on smelting with a stranger's fuel beneath its own batch.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_fuel_overfull", timeoutTicks = 1200)
+    public static void moreFuelThanTheReceiptPaidForIsForeign(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.COAL, 4));
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, Blocks.GLASS);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        // Diamond keeps the furnace cold, so the eight coal stay eight while the message is read.
+        village.setFurnaceClaim(new FurnaceClaim(Items.DIAMOND, 4, Items.COAL, 2, Items.DIAMOND_BLOCK, 4));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_INPUT, new ItemStack(Items.DIAMOND, 4));
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_FUEL, new ItemStack(Items.COAL, 8));
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        helper.runAfterDelay(600, () -> {
+            int fuel = furnaceSlot(helper, village, SmeltInFurnace.SLOT_FUEL).getCount();
+            long banked = storehouse.count(Items.COAL);
+            String waiting = job.waitingFor();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(fuel == 8, "the fuel slot went from 8 coal to " + fuel);
+            helper.assertTrue(banked == 4, "the village banked a stranger's coal: " + banked + " of the 4 it started with");
+            helper.assertTrue(waiting != null && waiting.contains("fuel") && waiting.contains("coal"),
+                    "an overfull fuel slot must be named, but the artisan is waiting for " + waiting);
+            helper.succeed();
+        });
+    }
+
+    /**
+     * A batch burns the fuel that is already in the slot rather than a fuel the village would rather have used: it
+     * cannot empty that slot to make room, so the choice is that fuel or no batch at all.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_burns_whats_there", timeoutTicks = 2400)
+    public static void aBatchBurnsTheFuelAlreadyInTheSlot(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village,
+                Map.of(Items.SAND, 2, Items.COAL, 8, Items.BAMBOO, 64));
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, Blocks.GLASS);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        // Eight bamboo in the slot against coal on the shelf: coal is the better fuel and the village cannot have it.
+        seedFurnace(helper, village, SmeltInFurnace.SLOT_FUEL, new ItemStack(Items.BAMBOO, 8));
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        helper.succeedWhen(() -> {
+            long coal = storehouse.count(Items.COAL);
+            helper.assertTrue(storehouse.count(Items.GLASS) >= 2, "the village never smelted over a fuel slot it could"
+                    + " have burnt: glass " + storehouse.count(Items.GLASS) + ", waiting for " + job.waitingFor()
+                    + ", fuel slot " + furnaceSlot(helper, village, SmeltInFurnace.SLOT_FUEL));
+            helper.assertTrue(coal == 8, "the village took coal to a furnace already holding bamboo: " + coal + " of 8");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** A furnace that is replaced takes its receipt with it: the new one has never held anything of the village's. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_furnace_replaced")
+    public static void replacingTheFurnaceForgetsItsReceipt(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        BuilderTests.stockedStorehouse(helper, village, Map.of());
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        BlockPos furnace = village.furnacePos();
+        village.setFurnaceClaim(new FurnaceClaim(Items.SAND, 2, Items.COAL, 1, Items.GLASS, 2));
+
+        // A player mines the furnace and walls the spot up, so the village has to build its next one elsewhere.
+        helper.getLevel().setBlock(furnace, Blocks.STONE.defaultBlockState(), Block.UPDATE_CLIENTS);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        BlockPos moved = village.furnacePos();
+        FurnaceClaim claim = village.furnaceClaim();
+        VillageTestSupport.remove(helper, village);
+
+        helper.assertTrue(moved != null && !moved.equals(furnace), "the furnace was never replaced: " + moved);
+        helper.assertTrue(claim == null, "the receipt for a furnace that is gone was kept against its replacement: " + claim);
+        helper.succeed();
+    }
+
     /** The claim is village data, so it has to survive a save: it round-trips with everything else the village keeps. */
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_claim_codec")
     public static void aFurnaceClaimRoundTripsThroughTheVillageCodec(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
         village.setFurnacePos(helper.absolutePos(new BlockPos(19, 1, 26)));
-        FurnaceClaim claim = new FurnaceClaim(Items.SAND, 5, Items.COAL, 2, Items.GLASS, 5);
+        // Four different counts, so a codec that wires a field to the wrong getter cannot round-trip by coincidence.
+        FurnaceClaim claim = new FurnaceClaim(Items.SAND, 7, Items.COAL, 2, Items.GLASS, 5, 3);
         village.setFurnaceClaim(claim);
 
         VillageRegistry registry = VillageRegistry.get(helper.getLevel());
@@ -942,6 +1321,19 @@ public final class ArtisanTests {
         helper.assertTrue(decoded.furnaceClaim().isEmpty(), "an old save decoded a claim from nothing: " + decoded.furnaceClaim());
         helper.assertTrue(decoded.furnace().isPresent() && decoded.craftingTable().isPresent(),
                 "the rest of an old works tag was lost: " + decoded);
+        // And a save from between the two: a receipt written before the village counted what it had taken back.
+        CompoundTag older = new CompoundTag();
+        CompoundTag claim = new CompoundTag();
+        claim.putString("input", "minecraft:sand");
+        claim.putInt("input_count", 2);
+        claim.putString("fuel", "minecraft:coal");
+        claim.putInt("fuel_count", 1);
+        claim.putString("output", "minecraft:glass");
+        claim.putInt("output_count", 2);
+        older.put("furnace_claim", claim);
+        FurnaceClaim untouched = VillageWorks.CODEC.parse(NbtOps.INSTANCE, older).getOrThrow().furnaceClaim().orElse(null);
+        helper.assertTrue(untouched != null && untouched.takenCount() == 0,
+                "a receipt saved before the count existed did not load as untouched: " + untouched);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
         village.setFurnacePos(helper.absolutePos(new BlockPos(19, 1, 26)));
         boolean noClaim = village.furnaceClaim() == null;
