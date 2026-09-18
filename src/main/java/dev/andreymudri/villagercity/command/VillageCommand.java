@@ -1,6 +1,9 @@
 package dev.andreymudri.villagercity.command;
 
+import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.blueprint.Blueprint;
 import dev.andreymudri.villagercity.blueprint.Blueprints;
 import dev.andreymudri.villagercity.citizen.CitizenAttachments;
 import dev.andreymudri.villagercity.citizen.CitizenData;
@@ -20,6 +23,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
@@ -30,17 +34,27 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
-/** /villagercity village — prints the nearest village's state. */
+/**
+ * /villagercity village — prints the nearest village's state.
+ * /villagercity show [seconds|off] — outlines its areas in dust.
+ * /villagercity why — says whether the spot you stand on could hold a house, and what rejects it.
+ * /villagercity stock [houses] — fills its storehouse with starter house materials, for testing.
+ */
 @EventBusSubscriber(modid = VillagerCity.MODID)
 public final class VillageCommand {
     public static final int SEARCH_DISTANCE = 256;
+    /** Houses' worth of materials {@code /villagercity stock} adds when no count is given. */
+    public static final int DEFAULT_STOCK_HOUSES = 10;
+    public static final int MAX_STOCK_HOUSES = 100;
 
     private VillageCommand() {
     }
@@ -49,7 +63,101 @@ public final class VillageCommand {
     public static void onRegisterCommands(RegisterCommandsEvent event) {
         event.getDispatcher().register(Commands.literal("villagercity")
                 .requires(source -> source.hasPermission(2))
-                .then(Commands.literal("village").executes(context -> show(context.getSource()))));
+                .then(Commands.literal("village").executes(context -> show(context.getSource())))
+                .then(Commands.literal("why").executes(context -> why(context.getSource())))
+                .then(Commands.literal("show")
+                        .executes(context -> show(context.getSource(), VillageOutline.DEFAULT_SECONDS))
+                        .then(Commands.literal("off").executes(context -> hide(context.getSource())))
+                        .then(Commands.argument("seconds", IntegerArgumentType.integer(1, VillageOutline.MAX_SECONDS))
+                                .executes(context -> show(context.getSource(), IntegerArgumentType.getInteger(context, "seconds")))))
+                .then(Commands.literal("stock")
+                        .executes(context -> stock(context.getSource(), DEFAULT_STOCK_HOUSES))
+                        .then(Commands.argument("houses", IntegerArgumentType.integer(1, MAX_STOCK_HOUSES))
+                                .executes(context -> stock(context.getSource(), IntegerArgumentType.getInteger(context, "houses"))))));
+    }
+
+    /** Explains whether the spot the caller stands on could hold a starter house, and which rule turns it down. */
+    private static int why(CommandSourceStack source) {
+        ServerLevel level = source.getLevel();
+        VillageData village = VillageRegistry.get(level).nearest(BlockPos.containing(source.getPosition()), SEARCH_DISTANCE);
+        if (village == null) {
+            source.sendFailure(Component.literal("No village within " + SEARCH_DISTANCE + " blocks"));
+            return 0;
+        }
+        Optional<Blueprint> blueprint = Blueprints.load(level, Blueprints.STARTER_HOUSE);
+        if (blueprint.isEmpty()) {
+            source.sendFailure(Component.literal("The starter house blueprint could not be read"));
+            return 0;
+        }
+        for (String line : PlotDiagnostics.explain(level, village, BlockPos.containing(source.getPosition()), blueprint.get().size())) {
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+        return 1;
+    }
+
+    /**
+     * Draws the nearest village's areas as coloured dust for the player who asked: white the village itself, orange the
+     * ground the builder searches for a plot, blue a plot in progress, green a finished house.
+     */
+    private static int show(CommandSourceStack source, int seconds) throws CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        ServerLevel level = source.getLevel();
+        VillageData village = VillageRegistry.get(level).nearest(BlockPos.containing(source.getPosition()), SEARCH_DISTANCE);
+        if (village == null) {
+            source.sendFailure(Component.literal("No village within " + SEARCH_DISTANCE + " blocks"));
+            return 0;
+        }
+        VillageOutline.show(player, village, seconds);
+        int reach = Math.min(village.radius() + PlotPlanner.SEARCH_MARGIN, PlotPlanner.MAX_REACH);
+        source.sendSuccess(() -> Component.literal("Showing " + village.center().toShortString() + " for " + seconds
+                + "s: white village (radius " + village.radius() + "), orange plot search (" + reach
+                + "), blue plots, green houses"), false);
+        return 1;
+    }
+
+    /** Stops the caller's outline. */
+    private static int hide(CommandSourceStack source) throws CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        if (!VillageOutline.hide(player)) {
+            source.sendFailure(Component.literal("You are not showing a village"));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("Outline hidden"), false);
+        return 1;
+    }
+
+    /**
+     * Fills the nearest village's storehouse with the materials for {@code houses} starter houses. Nobody is credited for
+     * them, exactly as if they had always been stored.
+     */
+    public static int stock(CommandSourceStack source, int houses) {
+        ServerLevel level = source.getLevel();
+        VillageData village = VillageRegistry.get(level).nearest(BlockPos.containing(source.getPosition()), SEARCH_DISTANCE);
+        if (village == null) {
+            source.sendFailure(Component.literal("No village within " + SEARCH_DISTANCE + " blocks"));
+            return 0;
+        }
+        BlockPos storehouse = village.storehousePos();
+        if (storehouse == null || !level.isLoaded(storehouse)
+                || !(level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity entity)) {
+            source.sendFailure(Component.literal("That village has no loaded storehouse"));
+            return 0;
+        }
+        Optional<Blueprint> blueprint = Blueprints.load(level, Blueprints.STARTER_HOUSE);
+        if (blueprint.isEmpty()) {
+            source.sendFailure(Component.literal("The starter house blueprint could not be read"));
+            return 0;
+        }
+        Map<Item, Integer> materials = blueprint.get().requiredMaterials();
+        for (Map.Entry<Item, Integer> material : materials.entrySet()) {
+            entity.insert(new ItemStack(material.getKey()), (long) material.getValue() * houses);
+        }
+        String added = materials.entrySet().stream()
+                .map(entry -> BuiltInRegistries.ITEM.getKey(entry.getKey()).getPath() + " x" + (long) entry.getValue() * houses)
+                .collect(Collectors.joining(", "));
+        source.sendSuccess(() -> Component.literal("Stocked " + storehouse.toShortString() + " for " + houses
+                + " house(s): " + added), false);
+        return 1;
     }
 
     private static int show(CommandSourceStack source) {
