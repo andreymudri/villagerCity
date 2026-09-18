@@ -45,6 +45,7 @@ public final class VillageData {
     private final List<BlockPos> pathQueue;
     private @Nullable BlockPos craftingTablePos;
     private @Nullable BlockPos furnacePos;
+    private @Nullable VillageWorks.FurnaceClaim furnaceClaim;
     private boolean managed;
     /** Game time before which no builder or storehouse placement searches this village for a spot again; not saved. */
     private long nextPlotSearch;
@@ -83,6 +84,7 @@ public final class VillageData {
         works.pathQueue().forEach(this::queuePath);
         setCraftingTablePos(works.craftingTable().orElse(null));
         setFurnacePos(works.furnace().orElse(null));
+        this.furnaceClaim = works.furnaceClaim().orElse(null);
         this.managed = managed;
     }
 
@@ -261,9 +263,28 @@ public final class VillageData {
         this.furnacePos = pos == null ? null : pos.immutable();
     }
 
-    /** The saved form of the paths, the path queue and the workshop blocks. */
+    /**
+     * What the village has in its furnace and has not taken back, or null when it has nothing there. The furnace is
+     * shared with players, so this receipt is what tells the village's own batch from somebody else's smelting.
+     */
+    public @Nullable VillageWorks.FurnaceClaim furnaceClaim() {
+        return furnaceClaim;
+    }
+
+    /** Records what the villager just handed to the furnace; replaces any earlier claim on the same furnace. */
+    public void setFurnaceClaim(VillageWorks.FurnaceClaim claim) {
+        this.furnaceClaim = claim;
+    }
+
+    /** Forgets the claim, once the village has taken its output back or given the batch up. */
+    public void clearFurnaceClaim() {
+        this.furnaceClaim = null;
+    }
+
+    /** The saved form of the paths, the path queue, the workshop blocks and the furnace claim. */
     public VillageWorks works() {
-        return new VillageWorks(pathCells(), pathQueue(), Optional.ofNullable(craftingTablePos), Optional.ofNullable(furnacePos));
+        return new VillageWorks(pathCells(), pathQueue(), Optional.ofNullable(craftingTablePos),
+                Optional.ofNullable(furnacePos), Optional.ofNullable(furnaceClaim));
     }
 
     public int darkSpotCount() {

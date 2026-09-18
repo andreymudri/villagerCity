@@ -3,6 +3,9 @@ package dev.andreymudri.villagercity.craft;
 import dev.andreymudri.villagercity.citizen.Inventories;
 import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
+import dev.andreymudri.villagercity.village.VillageRegistry;
+import dev.andreymudri.villagercity.village.VillageWorks.FurnaceClaim;
+import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.SimpleContainer;
@@ -12,14 +15,14 @@ import net.minecraft.world.level.block.entity.AbstractFurnaceBlockEntity;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Tops the furnace up to one batch of {@code count} items, waits beside it while vanilla smelts, and takes the batch's
- * own output. The wait is bounded by {@link #TICKS_PER_ITEM} per item plus {@link #EXTRA_TICKS}, and counts only the
- * ticks this task ran, so a night the scheduler spends resting does not run it out.
+ * Runs one {@link FurnaceClaim}: tops the furnace up to the claimed batch, waits beside it while vanilla smelts, and
+ * takes the claimed output. The wait is bounded by {@link #TICKS_PER_ITEM} per item plus {@link #EXTRA_TICKS}, and
+ * counts only the ticks this task ran, so a night the scheduler spends resting does not run it out.
  * <p>
- * The furnace is shared with whoever else uses it, so the task treats it as found, not as owned. It refuses one whose
- * slots hold anything but this batch's own input, fuel and output; it never takes more than the batch could have
- * produced; and it resumes a batch an earlier trip left behind rather than refusing it, which is what keeps an
- * interrupted smelt from stranding the village's stock in the furnace.
+ * The furnace is shared with players and a slot says nothing about who filled it, so the claim is the only authority
+ * here. It is written into the village the moment items are handed over and cleared when the output comes back, which
+ * is what lets a later trip finish a batch a night interrupted and at the same time keeps a player's smelting safe:
+ * anything the claim does not cover is refused, not taken.
  */
 public final class SmeltInFurnace implements Task {
     /** How far the villager may stand from the furnace's center. */
@@ -33,54 +36,62 @@ public final class SmeltInFurnace implements Task {
     public static final int SLOT_RESULT = 2;
 
     private final BlockPos furnace;
-    private final Item input;
-    private final int count;
-    private final Item fuel;
-    private final int fuelCount;
-    private final Item output;
+    private final FurnaceClaim claim;
     private boolean loaded;
     private int waited;
-    private int handedInput;
-    private int handedFuel;
 
-    public SmeltInFurnace(BlockPos furnace, Item input, int count, Item fuel, int fuelCount, Item output) {
+    public SmeltInFurnace(BlockPos furnace, FurnaceClaim claim) {
         this.furnace = furnace.immutable();
-        this.input = input;
-        this.count = count;
-        this.fuel = fuel;
-        this.fuelCount = fuelCount;
-        this.output = output;
+        this.claim = claim;
     }
 
-    /** How many of a {@code count}-item batch are still to be smelted, given the output the furnace already holds for it. */
-    public static int remaining(AbstractFurnaceBlockEntity entity, Item output, int count) {
+    /**
+     * How many of the claimed batch are still to be smelted. Everything in the result slot up to the claim's
+     * {@code outputCount} is this batch's own, because a claim is only ever opened on an empty furnace.
+     */
+    public static int remaining(AbstractFurnaceBlockEntity entity, FurnaceClaim claim) {
+        return Math.max(0, claim.inputCount() - produced(entity, claim));
+    }
+
+    /** How many of the claim's output the furnace already holds for it, never more than the claim is owed. */
+    public static int produced(AbstractFurnaceBlockEntity entity, FurnaceClaim claim) {
         ItemStack result = entity.getItem(SLOT_RESULT);
-        return Math.max(0, count - (result.is(output) ? Math.min(count, result.getCount()) : 0));
+        return result.is(claim.output()) ? Math.min(claim.outputCount(), result.getCount()) : 0;
     }
 
-    /** How much of the input the storehouse must still supply: what is left to smelt, less what the furnace already holds. */
-    public static int inputTopUp(AbstractFurnaceBlockEntity entity, Item input, int count, Item output) {
-        ItemStack inputSlot = entity.getItem(SLOT_INPUT);
-        return Math.max(0, remaining(entity, output, count) - (inputSlot.is(input) ? inputSlot.getCount() : 0));
+    /** How much of the input the villager must still bring: what is left to smelt, less what the furnace holds. */
+    public static int inputTopUp(AbstractFurnaceBlockEntity entity, FurnaceClaim claim) {
+        ItemStack slot = entity.getItem(SLOT_INPUT);
+        int want = remaining(entity, claim) - (slot.is(claim.input()) ? slot.getCount() : 0);
+        return capped(entity, claim.input(), slot, want);
     }
 
-    /** How much fuel the storehouse must still supply for a batch that wants {@code fuelCount} in the fuel slot. */
-    public static int fuelTopUp(AbstractFurnaceBlockEntity entity, Item fuel, int fuelCount) {
-        ItemStack fuelSlot = entity.getItem(SLOT_FUEL);
-        return Math.max(0, fuelCount - (fuelSlot.is(fuel) ? fuelSlot.getCount() : 0));
+    /** How much fuel the villager must still bring for the claim. */
+    public static int fuelTopUp(AbstractFurnaceBlockEntity entity, FurnaceClaim claim) {
+        ItemStack slot = entity.getItem(SLOT_FUEL);
+        int want = claim.fuelCount() - (slot.is(claim.fuel()) ? slot.getCount() : 0);
+        return capped(entity, claim.fuel(), slot, want);
+    }
+
+    /**
+     * {@code want}, floored at zero and capped at the room left in the slot. Without the cap
+     * {@link AbstractFurnaceBlockEntity#setItem} truncates the stack silently and destroys the excess, which the
+     * villager has already taken out of the storehouse and paid for.
+     */
+    private static int capped(AbstractFurnaceBlockEntity entity, Item item, ItemStack slot, int want) {
+        int limit = Math.min(entity.getMaxStackSize(), new ItemStack(item).getMaxStackSize());
+        return Math.max(0, Math.min(want, limit - slot.getCount()));
     }
 
     @Override
     public void start(TaskContext ctx) {
         loaded = false;
         waited = 0;
-        handedInput = 0;
-        handedFuel = 0;
     }
 
     @Override
     public String describe(TaskContext ctx) {
-        return "smelting " + BuiltInRegistries.ITEM.getKey(input).getPath() + " in " + furnace.toShortString();
+        return "smelting " + BuiltInRegistries.ITEM.getKey(claim.input()).getPath() + " in " + furnace.toShortString();
     }
 
     @Override
@@ -90,84 +101,106 @@ public final class SmeltInFurnace implements Task {
         }
         SimpleContainer inventory = ctx.villager().getInventory();
         if (ctx.villager().distanceToSqr(Vec3.atCenterOf(furnace)) > REACH * REACH) {
-            // Walked out of reach mid-smelt, which is what a night does: the brain takes the villager to bed and the
-            // scheduler ticks this task again in the morning, too far away to touch the furnace. The batch stays put
-            // and the next trip resumes it, so giving up here strands nothing.
+            // Out of reach mid-smelt, which is what a night does: the brain walks the villager to bed and the
+            // scheduler ticks this task again in the morning, too far away to touch the furnace. The claim stays
+            // written, so the next trip resumes this batch however empty the storehouse is by then.
             return Status.FAILED;
         }
         if (!loaded) {
-            return load(entity, inventory);
+            return load(ctx, entity, inventory);
         }
         waited++;
         ItemStack result = entity.getItem(SLOT_RESULT);
-        if (!result.isEmpty() && !result.is(output)) {
+        if (!result.isEmpty() && !result.is(claim.output())) {
             // Somebody else's smelting finished into the result slot while this batch waited. None of it is the
-            // village's, so the batch is abandoned and only what this task handed over comes back.
-            return recover(entity, inventory) > 0 ? Status.SUCCESS : Status.FAILED;
+            // village's: take back only what the claim covers and give the batch up.
+            return finish(ctx, entity, inventory, 0);
         }
-        if (result.getCount() < count && waited <= count * TICKS_PER_ITEM + EXTRA_TICKS) {
+        if (result.getCount() < claim.outputCount() && waited <= claim.inputCount() * TICKS_PER_ITEM + EXTRA_TICKS) {
             return Status.RUNNING;
         }
-        int taken = moveOut(entity, inventory, SLOT_RESULT, Math.min(result.getCount(), count));
-        // Finished, or out of time. Either way take back whatever of this batch the furnace never burned, so the
-        // village's books balance again as soon as the villager deposits.
-        int back = taken >= count ? 0 : recover(entity, inventory);
-        return taken + back > 0 ? Status.SUCCESS : Status.FAILED;
+        return finish(ctx, entity, inventory, moveOut(entity, inventory, SLOT_RESULT, produced(entity, claim)));
     }
 
     /**
-     * Tops the input and fuel slots up to one batch from what the villager carries, on a furnace that is empty or
-     * already holds this very batch. A furnace holding anything else is left alone.
+     * Tops the input and fuel slots up to the claim from what the villager carries, and records the claim on the
+     * village the moment the items change hands. A furnace holding anything the claim does not cover is left alone.
      */
-    private Status load(AbstractFurnaceBlockEntity entity, SimpleContainer inventory) {
-        ItemStack inputSlot = entity.getItem(SLOT_INPUT);
-        ItemStack fuelSlot = entity.getItem(SLOT_FUEL);
-        ItemStack resultSlot = entity.getItem(SLOT_RESULT);
-        if ((!inputSlot.isEmpty() && !inputSlot.is(input))
-                || (!fuelSlot.isEmpty() && !fuelSlot.is(fuel))
-                || (!resultSlot.isEmpty() && !resultSlot.is(output))) {
+    private Status load(TaskContext ctx, AbstractFurnaceBlockEntity entity, SimpleContainer inventory) {
+        if (coveredBy(entity, claim) != null) {
             return Status.FAILED;
         }
-        int wantInput = inputTopUp(entity, input, count, output);
-        int wantFuel = fuelTopUp(entity, fuel, fuelCount);
+        Item input = claim.input();
+        Item fuel = claim.fuel();
         int carriedInput = Inventories.count(inventory, stack -> stack.is(input));
         int carriedFuel = Inventories.count(inventory, stack -> stack.is(fuel));
-        boolean enough = input == fuel
-                ? carriedInput >= wantInput + wantFuel
-                : carriedInput >= wantInput && carriedFuel >= wantFuel;
-        if (!enough) {
-            return Status.FAILED;
+        // Hand over as much of the top-up as the villager actually carries rather than refusing outright. A resumed
+        // batch is exactly the case where the storehouse could not refill the trip, and failing here would re-plan
+        // the same trip for ever; a short batch instead runs, times out and settles up.
+        int giveInput = Math.min(inputTopUp(entity, claim), carriedInput);
+        int giveFuel = Math.max(0, Math.min(fuelTopUp(entity, claim), input == fuel ? carriedFuel - giveInput : carriedFuel));
+        if (giveInput <= 0 && giveFuel <= 0 && produced(entity, claim) == 0 && entity.getItem(SLOT_INPUT).isEmpty()) {
+            // Nothing of the batch is in the furnace and nothing can be put there: the receipt is stale, drop it.
+            return finish(ctx, entity, inventory, 0);
         }
-        if (wantInput > 0) {
-            inventory.removeItemType(input, wantInput);
-            entity.setItem(SLOT_INPUT, new ItemStack(input, inputSlot.getCount() + wantInput));
-            handedInput += wantInput;
+        if (giveInput > 0) {
+            inventory.removeItemType(input, giveInput);
+            grow(entity, SLOT_INPUT, input, giveInput);
         }
-        if (wantFuel > 0) {
-            inventory.removeItemType(fuel, wantFuel);
-            entity.setItem(SLOT_FUEL, new ItemStack(fuel, entity.getItem(SLOT_FUEL).getCount() + wantFuel));
-            handedFuel += wantFuel;
+        if (giveFuel > 0) {
+            inventory.removeItemType(fuel, giveFuel);
+            grow(entity, SLOT_FUEL, fuel, giveFuel);
         }
         entity.setChanged();
+        // The receipt goes in the village, not in this task: the villager may never come back for it.
+        ctx.village().setFurnaceClaim(claim);
+        VillageRegistry.get(ctx.level()).setDirty();
         loaded = true;
         return Status.RUNNING;
     }
 
-    /** Takes back what this task put into the input and fuel slots and the furnace has not burned; never more. */
-    private int recover(AbstractFurnaceBlockEntity entity, SimpleContainer inventory) {
-        int inputBack = pullBack(entity, inventory, SLOT_INPUT, input, handedInput);
-        handedInput -= inputBack;
-        int fuelBack = pullBack(entity, inventory, SLOT_FUEL, fuel, handedFuel);
-        handedFuel -= fuelBack;
-        return inputBack + fuelBack;
+    /** Takes back what the claim still covers in the input and fuel slots, drops the claim, and reports the outcome. */
+    private Status finish(TaskContext ctx, AbstractFurnaceBlockEntity entity, SimpleContainer inventory, int taken) {
+        int back = taken >= claim.outputCount() ? 0
+                : moveOut(entity, inventory, SLOT_INPUT, owned(entity, SLOT_INPUT, claim.input(), claim.inputCount()))
+                        + moveOut(entity, inventory, SLOT_FUEL, owned(entity, SLOT_FUEL, claim.fuel(), claim.fuelCount()));
+        ctx.village().clearFurnaceClaim();
+        VillageRegistry.get(ctx.level()).setDirty();
+        return taken + back > 0 ? Status.SUCCESS : Status.FAILED;
     }
 
-    private static int pullBack(AbstractFurnaceBlockEntity entity, SimpleContainer inventory, int slot, Item item, int handed) {
-        ItemStack stack = entity.getItem(slot);
-        if (handed <= 0 || !stack.is(item)) {
-            return 0;
+    /**
+     * What in this furnace the claim does not cover, as "<slot> holding <item>", or null when the whole furnace is
+     * either empty or this batch. Used before touching anything, and by the artisan to name the blocker for a player.
+     */
+    public static @Nullable String coveredBy(AbstractFurnaceBlockEntity entity, FurnaceClaim claim) {
+        String input = foreign(entity, SLOT_INPUT, claim.input(), "input");
+        if (input != null) {
+            return input;
         }
-        return moveOut(entity, inventory, slot, Math.min(handed, stack.getCount()));
+        String fuel = foreign(entity, SLOT_FUEL, claim.fuel(), "fuel");
+        if (fuel != null) {
+            return fuel;
+        }
+        return foreign(entity, SLOT_RESULT, claim.output(), "result");
+    }
+
+    private static @Nullable String foreign(AbstractFurnaceBlockEntity entity, int slot, Item allowed, String name) {
+        ItemStack held = entity.getItem(slot);
+        return held.isEmpty() || held.is(allowed) ? null
+                : name + " slot holding " + BuiltInRegistries.ITEM.getKey(held.getItem()).getPath();
+    }
+
+    /** How many of a slot's contents the claim covers: never more than the claim says the village put there. */
+    private static int owned(AbstractFurnaceBlockEntity entity, int slot, Item item, int claimed) {
+        ItemStack held = entity.getItem(slot);
+        return held.is(item) ? Math.min(claimed, held.getCount()) : 0;
+    }
+
+    /** Adds to a slot without replacing what is in it, so a player's renamed stack keeps its data components. */
+    private static void grow(AbstractFurnaceBlockEntity entity, int slot, Item item, int amount) {
+        ItemStack present = entity.getItem(slot);
+        entity.setItem(slot, present.isEmpty() ? new ItemStack(item, amount) : present.copyWithCount(present.getCount() + amount));
     }
 
     /** Moves up to {@code amount} out of the slot into the inventory; whatever does not fit goes back. Returns how many moved. */

@@ -45,7 +45,13 @@ public final class WorkshopService {
             return;
         }
         ensure(level, village, storehouse, Blocks.CRAFTING_TABLE, village.craftingTablePos(), village::setCraftingTablePos);
+        BlockPos furnaceBefore = village.furnacePos();
         ensure(level, village, storehouse, Blocks.FURNACE, village.furnacePos(), village::setFurnacePos);
+        if (furnaceBefore != null && !furnaceBefore.equals(village.furnacePos())) {
+            // The furnace this claim was written against is gone, and its contents dropped with it. The receipt
+            // would otherwise send the artisan to a brand new furnace to collect a batch nobody ever put in it.
+            village.clearFurnaceClaim();
+        }
     }
 
     /**
