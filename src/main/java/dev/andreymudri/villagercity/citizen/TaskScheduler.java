@@ -2,6 +2,7 @@ package dev.andreymudri.villagercity.citizen;
 
 import com.google.common.collect.ImmutableList;
 import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.citizen.task.MoveTo;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageRegistry;
 import java.util.Optional;
@@ -56,6 +57,8 @@ public final class TaskScheduler {
             if (brain.isActive(cityTask)) {
                 brain.setActiveActivityIfPossible(scheduledActivity(level, villager));
             }
+            // Nothing drives the current task while vanilla has the villager, so no door it opened would be closed.
+            MoveTo.closeDoorsOpenedBy(level, villager);
             return;
         }
         if (!brain.isActive(cityTask)) {
@@ -114,6 +117,22 @@ public final class TaskScheduler {
         if (!citizen.tool().isEmpty() && villager.getMainHandItem() != citizen.tool()) {
             villager.setItemSlot(EquipmentSlot.MAINHAND, citizen.tool());
         }
+    }
+
+    /**
+     * Stops the villager's current task, if it has one, as the villager leaves the level: the task will never be ticked
+     * again, so it must undo now whatever it left in the world. Does nothing for a villager that is not a citizen.
+     */
+    public static void stopCurrentTask(ServerLevel level, Villager villager) {
+        Optional<CitizenRuntime> runtime = villager.getExistingData(CitizenAttachments.RUNTIME.get());
+        Optional<CitizenData> citizen = villager.getExistingData(CitizenAttachments.CITIZEN.get());
+        if (runtime.isEmpty() || citizen.isEmpty() || runtime.get().current == null) {
+            return;
+        }
+        Task current = runtime.get().current;
+        runtime.get().current = null;
+        VillageData village = citizen.get().villageId() != null ? VillageRegistry.get(level).get(citizen.get().villageId()) : null;
+        current.stop(new TaskContext(level, villager, village, citizen.get()));
     }
 
     private static void release(ServerLevel level, Villager villager, CitizenData citizen, @Nullable VillageData village, CitizenRuntime runtime) {

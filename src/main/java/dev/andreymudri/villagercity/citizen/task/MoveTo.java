@@ -4,8 +4,10 @@ import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.WeakHashMap;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -28,7 +30,9 @@ import net.minecraft.world.phys.Vec3;
  * <p>The path may lead through a closed wooden door, since a villager's navigation plans through them, but vanilla's
  * door behaviour only opens doors on the path in the brain's {@code PATH} memory, which this task never sets. So the
  * task opens a closed wooden door itself once the citizen is within {@link #DOOR_REACH} of it on its path, and closes
- * it again once the citizen is farther than that from it, or when the task ends. It never opens any other door.
+ * it again once the citizen is farther than that from it, when the task ends, and whenever the citizen yields to
+ * vanilla ({@link #closeDoorsOpenedBy}); a door met again on the path afterwards is opened again. It never opens any
+ * other door. A door whose chunk is not loaded is left as it is.
  */
 public final class MoveTo implements Task {
     public static final double SPEED = 0.6;
@@ -51,6 +55,10 @@ public final class MoveTo implements Task {
     private int lastPathTick;
     /** Lower halves of the wooden doors this task opened and has not closed yet. */
     private final Set<BlockPos> openedDoors = new LinkedHashSet<>();
+    /** The moves with a door open, by villager; weak, so a villager that is gone takes its entry with it. */
+    private static final Map<Villager, Set<MoveTo>> OPENERS = new WeakHashMap<>();
+    /** The villager this move opened a door for, while it has one open. */
+    private @Nullable Villager opener;
 
     public MoveTo(BlockPos target, double reach) {
         this(target, reach, false);
@@ -165,6 +173,8 @@ public final class MoveTo implements Task {
             if (!door.isOpen(state)) {
                 door.setOpen(villager, level, level.getBlockState(lower), lower, true);
                 openedDoors.add(lower);
+                OPENERS.computeIfAbsent(villager, key -> new LinkedHashSet<>()).add(this);
+                opener = villager;
             }
         }
     }
@@ -178,12 +188,28 @@ public final class MoveTo implements Task {
                 it.remove();
             }
         }
+        if (openedDoors.isEmpty()) {
+            forgetOpener();
+        }
     }
 
     /** Closes every door this task opened. */
     private void closeDoors(ServerLevel level) {
         openedDoors.forEach(door -> close(level, door));
         openedDoors.clear();
+        forgetOpener();
+    }
+
+    /** Drops this move from {@link #OPENERS}: it has no door open any more. */
+    private void forgetOpener() {
+        if (opener == null) {
+            return;
+        }
+        Set<MoveTo> moves = OPENERS.get(opener);
+        if (moves != null && moves.remove(this) && moves.isEmpty()) {
+            OPENERS.remove(opener);
+        }
+        opener = null;
     }
 
     /** Closes {@code pos} if it is still an open wooden door; a door since broken or replaced is left alone. */
@@ -212,6 +238,17 @@ public final class MoveTo implements Task {
             return navigation.createPath(Set.of(target), accuracy);
         }
         return navigation.createPath(target, accuracy);
+    }
+
+    /**
+     * Closes every door a move of {@code villager} opened and has not closed yet. The scheduler calls this while the
+     * citizen yields to vanilla: the move stays current but is not ticked, however deep inside another task it runs.
+     */
+    public static void closeDoorsOpenedBy(ServerLevel level, Villager villager) {
+        Set<MoveTo> moves = OPENERS.remove(villager);
+        if (moves != null) {
+            moves.forEach(move -> move.closeDoors(level));
+        }
     }
 
     @Override
