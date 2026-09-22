@@ -397,6 +397,8 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageWorks.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageCodecs.java`
 - Create: `src/main/java/dev/andreymudri/villagercity/gametest/ArtisanTests.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/command/VillageCommand.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/gametest/VillageRegistryTests.java`
 
 **Depends:** T1, T6
 
@@ -413,7 +415,7 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
   2. Compute the demand and run `CraftPlanner.plan`. Set `village.setArtisanOrders(...)` to strings like `"oak_door x1"`. With nothing to do, return null with `waitingFor = "no orders"`. With only unmet orders, use `waitingFor = "materials: " + missingBase ids`.
   3. Take the first step:
      - **CRAFT:** `times` is capped so the outputs fit one stack. Plan `TaskSequence.of(MoveTo.digOut(storehouse, 2.5), new Withdraw(storehouse, inputs), MoveTo.digOut(table, 2.5), new CraftAtTable(step), MoveTo.digOut(storehouse, 2.5), new Deposit(storehouse, any item))`.
-     - **SMELT:** the village does not smelt (Step 8). A plan containing a smelting step is not buildable: skip it, and report its output through `waitingFor = "materials: " + ...` so a player knows what to bring.
+     - **SMELT:** the village does not smelt (Step 8). A plan containing a smelting step is not buildable: skip it, and report the output of the skipped smelting step through `waitingFor = "materials: " + ...` so a player knows what to bring (Step 8).
 - [ ] **Step 4: `CraftAtTable(CraftStep)`.** It must be within 3 blocks of the table.
   - Every 10 ticks it removes one batch of inputs from the villager's inventory, adds the result (`recipe.getResultItem(registries)` copy), and swings the arm.
   - It fails when inputs are missing or the result does not fit.
@@ -446,12 +448,18 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
     **left standing** — the village simply stops maintaining it. Breaking a block a player may be using to fix our own
     bookkeeping is exactly the kind of thing this step exists to prevent. An old save that recorded a furnace position
     must still load, with the unknown field ignored.
+  - **The `furnace` field is deleted, not just left unset** (user decision, 2026-09-22). Remove it from the
+    `VillageWorks` record and its codec, `furnacePos`/`setFurnacePos` and the `occupiedFootprints` entry from
+    `VillageData`, the furnace from `VillageCommand`'s workshop line, and the furnace round-trip assertions from
+    `VillageRegistryTests`.
   - **The artisan crafts, and only crafts.** A plan whose steps include smelting is not buildable: the artisan skips
     it and reports what a player must bring.
   - **The report names the item the village actually needs, not its raw material.** The village cannot turn sand into
     glass any more, so sand is of no use to it and `materials: sand` would send a player to the wrong place. An
-    unbuildable order reports the ORDER's own item — `materials: glass` — which is the whole user-facing surface of
-    this cut.
+    unbuildable order reports the output of the smelting step it cannot do: the item a player's own furnace would
+    make, never that step's input. For glass that is the order itself (`materials: glass`). For a torch with no coal
+    it is `materials: charcoal`, not `torch`: charcoal is what the player must actually bring, since the village
+    still crafts the torch (user decision, 2026-09-22). This is the whole user-facing surface of this cut.
   - **Smelted goods become player-supplied.** Glass and charcoal come from the player's own furnace into the
     storehouse. Torches are unaffected: they are crafted, from coal or charcoal plus a stick.
 - [ ] **Step 9: tests for a village that does not smelt.** In `ArtisanTests`, each in its own `vc_` batch:
