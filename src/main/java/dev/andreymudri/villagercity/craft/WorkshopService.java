@@ -21,6 +21,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -93,6 +94,21 @@ public final class WorkshopService {
     }
 
     /**
+     * Takes the whole price. One extraction draws on a single storehouse entry, and differently named planks are
+     * separate entries, so it keeps drawing until the price is paid: {@link #price} already counted every entry.
+     */
+    private static void pay(StorehouseBlockEntity stock, Item item, int amount) {
+        int owed = amount;
+        while (owed > 0) {
+            ItemStack taken = stock.extractForCitizen(item, owed);
+            if (taken.isEmpty()) {
+                return;
+            }
+            owed -= taken.getCount();
+        }
+    }
+
+    /**
      * Leaves a recorded block that is still there alone; otherwise clears the record and places a new one at the first
      * spot {@link #spots} offers. Clearing first matters: the old cell is dropped from {@code occupiedFootprints} and
      * can be reused right away.
@@ -120,7 +136,7 @@ public final class WorkshopService {
                 snapshot.restore(Block.UPDATE_ALL);
                 return;
             }
-            stock.extractForCitizen(price.get().getKey(), price.get().getValue());
+            pay(stock, price.get().getKey(), price.get().getValue());
             save.accept(spot);
             return;
         }

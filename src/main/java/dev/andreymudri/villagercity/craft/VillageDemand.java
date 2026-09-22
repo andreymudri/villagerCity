@@ -50,7 +50,13 @@ public final class VillageDemand {
             }
         });
         if (village.jobCount(JobType.LAMPLIGHTER) > 0) {
-            int torches = TORCH_STOCK - (int) Math.min(TORCH_STOCK, storehouse.count(Items.TORCH));
+            int held = (int) Math.min(TORCH_STOCK, storehouse.count(Items.TORCH));
+            // The torches already stocked count toward the sixteen, so they are reserved: the planner subtracts spare
+            // stock from each order, and without this it would subtract them a second time and stop at eight.
+            if (held > 0) {
+                reserved.merge(Items.TORCH, held, Integer::max);
+            }
+            int torches = TORCH_STOCK - held;
             if (torches > 0) {
                 // The builder's own torch is already counted against the same stock, so the village orders the larger
                 // of the two rather than their sum; adding them would order torches the storehouse already holds.

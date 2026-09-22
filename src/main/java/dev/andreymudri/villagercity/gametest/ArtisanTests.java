@@ -6,6 +6,7 @@ import dev.andreymudri.villagercity.blueprint.BlueprintPlacement;
 import dev.andreymudri.villagercity.blueprint.Blueprints;
 import dev.andreymudri.villagercity.citizen.Job;
 import dev.andreymudri.villagercity.citizen.JobType;
+import dev.andreymudri.villagercity.craft.VillageDemand;
 import dev.andreymudri.villagercity.craft.WorkshopService;
 import dev.andreymudri.villagercity.job.ArtisanJob;
 import dev.andreymudri.villagercity.job.BuilderJob;
@@ -21,10 +22,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.Item;
@@ -440,6 +443,53 @@ public final class ArtisanTests {
         helper.assertTrue(tables == 2, tables + " tables set from one log and seven planks, not 2");
         helper.assertTrue(logs == 0 && planks == 3, "paid the wrong way: " + logs + " logs and " + planks + " planks left");
         helper.succeed();
+    }
+
+    /**
+     * Differently named planks are separate storehouse entries. The village still takes the full four for a table,
+     * or breaking the table would turn one plank into a crafting table's worth of them.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_table_named_planks")
+    public static void namedPlanksStillPayTheFullPrice(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity stock = BuilderTests.stockedStorehouse(helper, village, Map.of());
+        for (String name : List.of("a", "b", "c", "d")) {
+            ItemStack plank = new ItemStack(Items.OAK_PLANKS);
+            plank.set(DataComponents.CUSTOM_NAME, Component.literal(name));
+            stock.insert(plank, 1);
+        }
+
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        BlockPos table = village.craftingTablePos();
+        long planks = stock.count(Items.OAK_PLANKS);
+        VillageTestSupport.remove(helper, village);
+
+        helper.assertTrue(table != null, "four named planks did not pay for a table");
+        helper.assertTrue(planks == 0, "the table cost " + (4 - planks) + " planks, not 4");
+        helper.succeed();
+    }
+
+    /**
+     * The lamplighter's stock is sixteen torches. The torches already held count toward it once, not twice: a village
+     * holding eight goes on to make eight more.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_torch_stock", timeoutTicks = TRIP_TIMEOUT)
+    public static void theLamplightersStockFillsToSixteen(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village,
+                Map.of(Items.OAK_LOG, 1, Items.TORCH, 8, Items.COAL, 4, Items.STICK, 4));
+        village.setCitizen(UUID.randomUUID(), JobType.LAMPLIGHTER);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        helper.succeedWhen(() -> {
+            long torches = storehouse.count(Items.TORCH);
+            helper.assertTrue(torches >= VillageDemand.TORCH_STOCK, "the torch stock stopped at " + torches
+                    + ": waiting for " + job.waitingFor() + ", orders " + village.artisanOrders());
+            VillageTestSupport.remove(helper, village);
+        });
     }
 
     /** Planks the builder is counted on having never pay for a table: the village waits for spare stock instead. */
