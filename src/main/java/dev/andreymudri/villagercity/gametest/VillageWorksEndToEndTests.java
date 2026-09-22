@@ -5,6 +5,7 @@ import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
+import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -93,6 +94,23 @@ public final class VillageWorksEndToEndTests {
         return dark;
     }
 
+    /**
+     * Fails unless the village has street cells and every one of them has a recorded path cell on either hand across
+     * the street: east and west, or north and south.
+     */
+    private static void assertThreeWideStreets(GameTestHelper helper, VillageData village) {
+        List<StreetCell> streets = village.streets();
+        helper.assertFalse(streets.isEmpty(), "the village laid no street");
+        List<BlockPos> paths = village.pathCells();
+        for (StreetCell cell : streets) {
+            BlockPos pos = cell.pos();
+            boolean eastWest = paths.contains(pos.east()) && paths.contains(pos.west());
+            boolean northSouth = paths.contains(pos.north()) && paths.contains(pos.south());
+            helper.assertTrue(eastWest || northSouth, "the street cell at " + StreetTests.relative(helper, pos).toShortString()
+                    + " is not three cells wide");
+        }
+    }
+
     private static boolean isOpen(ServerLevel level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         return state.getCollisionShape(level, pos).isEmpty() && state.getFluidState().isEmpty();
@@ -100,8 +118,8 @@ public final class VillageWorksEndToEndTests {
 
     /**
      * A managed village on a terraced hillside, five unemployed villagers and a storehouse of player supplies. With
-     * nobody's help it hires all five jobs, levels a plot, builds a house on it and lights its ground until no monster
-     * could spawn there.
+     * nobody's help it hires all five jobs, lays a three-wide street, levels a plot, builds a house on it and lights its
+     * ground until no monster could spawn there.
      */
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_works_e2e_hill", timeoutTicks = 36000, skyAccess = true)
     public static void aHillVillageGrowsOnItsOwn(GameTestHelper helper) {
@@ -137,6 +155,7 @@ public final class VillageWorksEndToEndTests {
             helper.assertTrue(village.houseCount() == 1, "houses " + village.houseCount() + ", plots "
                     + village.plots().stream().map(Plot::prepared).toList() + ", artisan orders " + village.artisanOrders());
             helper.assertTrue(sawUnprepared.get(), "the house went up on a plot the paver never had to level");
+            assertThreeWideStreets(helper, village);
             int dark = darkColumns(helper, village);
             helper.assertTrue(dark == 0, dark + " columns of village ground are still dark enough to spawn monsters");
             VillageTestSupport.remove(helper, village);

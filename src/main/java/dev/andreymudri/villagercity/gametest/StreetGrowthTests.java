@@ -40,6 +40,8 @@ public final class StreetGrowthTests {
     private static final BlockPos BELL = new BlockPos(24, 1, 24);
     /** The rise {@link #aSlopeIsCrossedInSeveralHopsAndNeverInOne} climbs. */
     private static final int RISE = 20;
+    /** How far the plateau of {@link #aBellAtACliffEdgeStartsItsStreetLevelWithIt} stands above the ground beside it. */
+    private static final int CLIFF = 6;
 
     /**
      * A paver running {@link PaverJob}, also put on the village's roster: enrolling alone does not add it to an unmanaged
@@ -142,6 +144,58 @@ public final class StreetGrowthTests {
                     + ", plots " + village.plots().size());
             helper.assertTrue(village.streets().isEmpty(), "a street left the walled bell: " + village.streets());
             helper.assertTrue("room to grow".equals(waitingFor(paver)), "the paver is waiting for " + waitingFor(paver));
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /**
+     * The bell stands at the northern edge of a plateau {@link #CLIFF} blocks high. North, the first direction a run from
+     * the bell tries, leaves the plateau at the cliff foot; east and west have a side cell at the foot; south stays on the
+     * plateau, level with the bell, and that is where the first street goes.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_street_growth_cliff_bell", timeoutTicks = 4000)
+    public static void aBellAtACliffEdgeStartsItsStreetLevelWithIt(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        StreetTests.terrain(helper, (x, z) -> z >= BELL.getZ() ? CLIFF : 0);
+        BlockPos bell = BELL.above(CLIFF);
+        VillageData village = VillageTestSupport.freshVillage(helper, bell, 30, false);
+        StreetTests.stockedStorehouse(helper, village, new BlockPos(40, CLIFF + 1, 40));
+        enrollPaver(helper, village, 28, CLIFF + 1, 28);
+        int bellY = helper.absolutePos(bell).getY();
+        helper.succeedWhen(() -> {
+            List<StreetCell> first = StreetTests.withHops(village, 1);
+            helper.assertTrue(first.size() == StreetWork.RUN_LENGTH, "the first run has " + first.size() + " cells");
+            helper.assertTrue(first.stream().allMatch(cell -> cell.pos().getY() == bellY), "the first street is not level with the bell: "
+                    + first.stream().map(cell -> StreetTests.relative(helper, cell.pos()).toShortString()).toList());
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /**
+     * An unprepared plot, with a dirt block on its floor to cut, and a street root with room to grow east: the paver
+     * prepares the plot before it records a single street cell.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_street_growth_paver_order", timeoutTicks = 4000)
+    public static void thePaverPreparesAPlotBeforeItGrowsAStreet(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = StreetTests.streetVillage(helper, StreetTests.ROOT, 0);
+        // Well clear of the run east from the root along z = 23 to 25, margin included.
+        BlockPos origin = new BlockPos(10, 1, 32);
+        helper.setBlock(origin.offset(1, 0, 1), Blocks.DIRT);
+        Plot plot = new Plot(UUID.randomUUID(), Blueprints.STARTER_HOUSE.toString(), helper.absolutePos(origin), new Vec3i(3, 3, 3), null,
+                0L, 0, false);
+        village.addPlot(plot);
+        enrollPaver(helper, village, 4, 1, 20);
+        helper.onEachTick(() -> {
+            boolean unprepared = village.plots().stream().anyMatch(p -> p.id().equals(plot.id()) && !p.prepared());
+            if (unprepared && !village.streets().stream().allMatch(cell -> cell.hops() == 0)) {
+                VillageTestSupport.remove(helper, village);
+                helper.fail("the paver grew a street before it prepared the plot: " + village.streets().size() + " street cells");
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.plots().stream().anyMatch(p -> p.id().equals(plot.id()) && p.prepared()), "the plot is not prepared yet");
+            helper.assertFalse(StreetTests.withHops(village, 1).isEmpty(), "the street never grew after the plot was prepared");
             VillageTestSupport.remove(helper, village);
         });
     }

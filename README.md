@@ -10,7 +10,8 @@ command it RTS-style.
 > follow-up fixes have landed: citizens respect `doMobGriefing` and protection mods, and the storehouse credit
 > can no longer be farmed. The lumberjack now fells every vanilla sapling tree whole and never a build, and the
 > builder finds plots in hilly villages. Three more jobs have landed: an artisan crafts what the village is short
-> of, a paver levels building sites and lays paths, and a lamplighter lights the village. Known open issues are
+> of, a paver levels building sites and lays streets, and a lamplighter lights the village. A village with a paver
+> now grows street-first: streets climb away from the bell and houses go up beside them. Known open issues are
 > listed under [Known issues](#known-issues).
 
 ## What works today
@@ -43,12 +44,14 @@ command it RTS-style.
   remembered, and pistons carry that memory along. A tree touching any remembered log, a tree inside a
   generated structure (village houses), and logs resting on a man-made foundation are never felled. Trees grown
   with bone meal count as natural.
-- **Builder:** once the storehouse holds a full blueprint's materials, claims a plot near the bell, withdraws the
-  materials, and builds `villagercity:blueprint/starter_house` (5×5×5 oak house) block by block. Plots are flat
-  natural ground (no caves or overhangs) up to 48 blocks from the bell and 16 above or below it, that the builder
-  can walk to. A plot whose builder gives up is retried after two minutes and dropped after the third try, and a
-  dropped spot is never picked again; a plot whose builder dies or leaves is taken over at once. A resumed plot
-  needs only the materials for the missing blocks.
+- **Builder:** once the storehouse holds a full blueprint's materials, claims a plot, withdraws the materials, and
+  builds `villagercity:blueprint/starter_house` (5×5×5 oak house) block by block. In a village with a paver the plot
+  is beside a street (see [Street-first growth](#street-first-growth)), and until the first street is laid the
+  builder waits (`waiting for a street to build on`). In a village without one, plots are flat natural ground (no
+  caves or overhangs) near the bell, up to 48 blocks from it, that the builder can walk to. A plot whose builder
+  gives up is retried after two minutes and dropped after the third try, and a dropped spot is never picked again;
+  a plot whose builder dies or leaves is taken over at once. A resumed plot needs only the materials for the
+  missing blocks.
 - **Artisan:** crafts, at a crafting table beside the storehouse, what the builder and the lamplighter are short
   of: planks, doors and other blueprint materials from logs, and torches from coal or charcoal and sticks. It
   never spends stock another job is counting on. The village pays for its crafting table (one log, or four planks)
@@ -56,10 +59,11 @@ command it RTS-style.
   not smelt:** glass and charcoal come from the player. When an order needs smelting, the artisan asks for the
   smelted item (`materials: glass`, `materials: charcoal`), never its raw material, and goes on with the orders it
   can fill. A furnace an older version placed is left standing and never touched.
-- **Paver:** levels building sites on uneven ground by cutting and filling. Dug earth is reused as fill, then dirt,
-  cobblestone or stone from the storehouse. When a house is finished it lays a path from the door to the bell,
-  with one-block steps and oak plank bridges. With a paver on the roster the builder also takes plots on slopes;
-  without one it builds on flat ground only.
+- **Paver:** works in a fixed order: it levels a claimed plot that is not prepared yet, else it lays the next street
+  run, else it waits (`waiting for room to grow`). Levelling cuts and fills; dug earth is reused as fill, then dirt,
+  cobblestone or stone from the storehouse. Streets are surfaced with dirt path, with one-block steps and oak plank
+  bridges. With a paver on the roster the builder also takes plots on slopes; without one it builds on flat ground
+  only.
 - **Lamplighter:** keeps up to 16 torches in stock (the artisan makes them) and places them on dark ground inside
   the village until nowhere in it is dark enough for monsters to spawn, then rescans every minute. The starter
   house has a torch inside.
@@ -68,6 +72,30 @@ command it RTS-style.
   next to water or lava, or anything `doMobGriefing` or a protection mod forbids. A builder only abandons a plot
   for failures at the plot itself, not for failing to reach the storehouse.
 - **Save-safe:** in-flight work is not saved; jobs re-plan from the world after a reload.
+
+### Street-first growth
+
+A village with a paver grows along streets, the way a vanilla village does, instead of scattering houses around the
+bell:
+
+- **Streets are 3 blocks wide:** a centre cell and a side cell on either hand, levelled across the width to the
+  centre's height. A side cell is cut or filled when its ground is at most 2 blocks off the centre.
+- **A street grows one straight run at a time,** of up to **8** cells, away from the bell, climbing at most 1 block
+  per cell. The first run starts at the bell, on the side where the ground is level with the ground under the bell
+  when there is one, so a bell at a cliff's edge starts its street on the clifftop. Later runs start from the street
+  end with the fewest hops. A run stops before a house, plot, storehouse, another street, a fluid it cannot bridge,
+  or ground that steps more than 1 block.
+- **Limits:** a street cell is at most **64** blocks from the bell (counted as the larger of the x and z distances),
+  and at most **6** hops, one hop being one run. Six runs of eight cells can climb 48 blocks.
+- **Houses go beside streets:** a pad's footprint plus its one-block margin must touch a street, and the house floor
+  is that street's height. The paver levels the pad if it needs at most **80** blocks of cut plus fill and no column
+  more than **6** off the floor. Houses and plots keep at least **5** open columns between them, and **one pad in
+  eight** is left empty, so the village has gaps. Pads on fewer hops come first, then those needing less earthwork,
+  then those nearer the bell.
+- **When nothing can grow,** every street end blocked or at its limits, the paver reports `waiting for room to grow`.
+- A village with **no paver** keeps the old rule: flat plots near the bell, and no streets.
+
+The street graph is saved with the village, so growth resumes after a reload.
 
 Villagers still trade, sleep, panic, and react to raids as usual: the mod pauses its own work whenever vanilla
 needs the villager.
@@ -122,11 +150,14 @@ The first `runClient` or `build` downloads and decompiles Minecraft and takes se
 3. Make sure it has two **adult villagers without a profession** (not nitwits). Break a couple of
    workstations or use spawn eggs if every villager is employed.
 4. Run `/villagercity village` (op only) to see the nearest village's id, age, house count, storehouse
-   contents, every plot's progress, and each citizen's job, position and current step, for example
+   contents, every plot's progress (including whether the paver has prepared it), the street graph as
+   `streets: N cells, M ends, deepest H hops`, and each citizen's job, position and current step, for example
    `task=walking to 864, 88, -1070 (15 blocks, stuck)` or `task=placing oak_planks at 842, 73, -1028`.
    An idle citizen says what it waits for, for example
    `task=idle (waiting for materials: oak_planks x57)` or `task=idle (waiting for a buildable plot near the
    bell)`; `task=sleeping`, `task=trading` or `task=rest` mean vanilla has the villager for now.
+   `/villagercity show` draws the village as coloured dust for a while: street cells in magenta, with a second
+   dust a block higher over each street end.
 5. With an artisan hired (a third unemployed villager), stock the storehouse with oak logs, 25 cobblestone,
    2 glass, 3 white wool, 3 red dye and a coal: the artisan crafts the planks, the door, the bed and the torch the
    house needs. The village does not smelt, so bring glass from your own furnace, not sand. Without an artisan,
@@ -151,8 +182,12 @@ into `~/.minecraft/mods/`.
   recipes only, never a smithing table, stonecutter or loom, and never a recipe that leaves a bucket or bottle.
 - The artisan can order again materials the builder is already carrying, and turn spare logs into planks nobody
   needs.
-- Paths link each house to the bell, not houses to each other. The paver builds no retaining walls or stair
-  blocks, and the lamplighter lights no caves or building interiors.
+- Streets have no junctions or crossings: each run is a straight line from a street end. A house claimed right
+  ahead of the only street end blocks it, and the village then waits for room to grow with no house to add. In a
+  test on a slope, with the first street running along the contour, the builder claimed exactly that pad.
+- A builder can finish a house while standing inside it and then stay shut in behind the closed door.
+- Houses do not face the street; the door is always on the same side of the blueprint.
+- The paver builds no retaining walls or stair blocks, and the lamplighter lights no caves or building interiors.
 - The starter house needs oak specifically; villages among birch or spruce need the player to bring oak.
 - Lumberjack limits:
   - log builds placed before the mod was installed, or with commands, are protected only by their shape

@@ -174,7 +174,10 @@ public final class StreetWork implements Job {
      * The run to lay next: from the street end with the fewest hops (below {@link #MAX_HOPS}), preferring an end level
      * with the cell it grew from, in the direction that takes it farthest from the bell among those whose first slice
      * can be laid. Empty when no end can grow. An empty graph grows from the bell: its own cell is the root end, at hop 0,
-     * and the first centre of a run from it sits on its own column's ground however high the bell hangs.
+     * and the first centre of a run from it sits on its own column's ground however high the bell hangs. From the bell,
+     * a direction whose first centre lies within {@link #MAX_STEP} of the ground under the bell is taken first, so a bell
+     * at a cliff's edge starts its street on the clifftop; only when no direction has one is the first free direction
+     * taken, which is how a bell on a pillar still starts a street on the ground around it.
      */
     public static Optional<Run> nextRun(ServerLevel level, VillageData village) {
         return nextRun(level, village, Set.of());
@@ -190,7 +193,19 @@ public final class StreetWork implements Job {
             ends.add(new StreetCell(bell, 0));
         }
         for (StreetCell end : ends) {
-            for (Direction direction : awayFromBell(end.pos(), bell)) {
+            List<Direction> directions = awayFromBell(end.pos(), bell);
+            if (streets.isEmpty() && end.pos().equals(bell)) {
+                // A bell at a cliff's edge: a street level with it beats one that starts at the cliff foot.
+                int under = groundUnder(level, bell);
+                for (Direction direction : directions) {
+                    Run candidate = new Run(end, direction);
+                    List<Slice> first = layout(level, village, candidate, refused, 1);
+                    if (!first.isEmpty() && Math.abs(first.get(0).centre().surface().getY() - under) <= MAX_STEP) {
+                        return Optional.of(candidate);
+                    }
+                }
+            }
+            for (Direction direction : directions) {
                 Run candidate = new Run(end, direction);
                 if (!layout(level, village, candidate, refused, 1).isEmpty()) {
                     return Optional.of(candidate);
@@ -198,6 +213,20 @@ public final class StreetWork implements Job {
             }
         }
         return Optional.empty();
+    }
+
+    /**
+     * The first free y above the topmost block below {@code pos} that blocks movement, or {@code pos.getY()} itself when
+     * nothing below it does down to the bottom of the world.
+     */
+    private static int groundUnder(ServerLevel level, BlockPos pos) {
+        BlockPos.MutableBlockPos cursor = pos.mutable();
+        for (int y = pos.getY() - 1; y >= level.getMinBuildHeight(); y--) {
+            if (level.getBlockState(cursor.setY(y)).blocksMotion()) {
+                return y + 1;
+            }
+        }
+        return pos.getY();
     }
 
     /**
