@@ -65,8 +65,8 @@ command it RTS-style.
   bridges. With a paver on the roster the builder also takes plots on slopes; without one it builds on flat ground
   only.
 - **Lamplighter:** keeps up to 16 torches in stock (the artisan makes them) and places them on dark ground inside
-  the village until nowhere in it is dark enough for monsters to spawn, then rescans every minute. The starter
-  house has a torch inside.
+  the village until nowhere in it is dark enough for monsters to spawn, then rescans every minute. It never puts a
+  torch on a plot or on the one-block margin around it that the paver levels. The starter house has a torch inside.
 - **Trapped citizens dig out:** a worker stuck in a cave that cannot path to the storehouse or its plot digs a
   staircase through natural ground (stone, dirt, sand, gravel, ores) toward it. It never digs build blocks, blocks
   next to water or lava, or anything `doMobGriefing` or a protection mod forbids. A builder only abandons a plot
@@ -93,8 +93,9 @@ bell:
   is that street's height. The paver levels the pad if it needs at most **80** blocks of cut plus fill and no column
   more than **6** off the floor. Houses and plots keep at least **5** open columns between them, and **one pad in
   eight** is left empty, so the village has gaps. A pad never covers, even with its margin, the three cells straight
-  ahead of a street end, where the next run from that end starts, so a house does not cap a street. Pads on fewer
-  hops come first, then those needing less earthwork, then those nearer the bell.
+  ahead of a street end, where the next run from that end starts, so a house does not cap a street. A pad is not
+  taken when something the paver may not clear, such as a torch, stands where its fill would go. Pads on fewer hops
+  come first, then those needing less earthwork, then those nearer the bell.
 - **When nothing can grow,** every street end blocked or at its limits, the paver reports `waiting for room to grow`.
 - A village with **no paver** keeps the old rule: flat plots near the bell, and no streets.
 

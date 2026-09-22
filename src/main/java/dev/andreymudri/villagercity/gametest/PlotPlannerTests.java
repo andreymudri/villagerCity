@@ -238,4 +238,55 @@ public final class PlotPlannerTests {
                 + " lies across the slice ahead of the street end");
         helper.succeed();
     }
+
+    /**
+     * A street a block above flat ground, north from the bell, (24, 2, 23) to (24, 2, 16), with its side cells. The only
+     * natural ground is the patch x 26 to 32, z 14 to 24 east of it, cobblestone everywhere else, so the pads that can
+     * touch the street are the 5 by 5s at x 27, z 15 to 19, every column of which the paver has to fill one block up to
+     * the street's height. There are five so that the one-in-eight skip ({@link PlotRules#skipped}), which varies with
+     * where the test runs, leaves some. With {@code torch}, a torch stands at (29, 1, 20), where every one of their fills
+     * would go.
+     */
+    private static Optional<PlotPlanner.Site> raisedStreetPad(GameTestHelper helper, boolean torch) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if (x < 26 || x > 32 || z < 14 || z > 24) {
+                    helper.setBlock(x, 0, z, Blocks.COBBLESTONE);
+                }
+            }
+        }
+        if (torch) {
+            helper.setBlock(29, 1, 20, Blocks.TORCH);
+        }
+        VillageData village = village(helper);
+        for (int z = 23; z >= 16; z--) {
+            village.addStreetCell(helper.absolutePos(new BlockPos(24, 2, z)), 1);
+            village.addPathCell(helper.absolutePos(new BlockPos(23, 2, z)));
+            village.addPathCell(helper.absolutePos(new BlockPos(25, 2, z)));
+        }
+        return PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true);
+    }
+
+    /** The pad of {@link #raisedStreetPad} is planned when nothing stands where its fill goes. */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void aPadTheStreetRaisesIsPlannedWhenItsGroundIsClear(GameTestHelper helper) {
+        Optional<PlotPlanner.Site> site = raisedStreetPad(helper, false);
+        helper.assertTrue(site.map(found -> relative(helper, found.origin())).filter(origin -> origin.getX() == 27 && origin.getY() == 2
+                && origin.getZ() >= 15 && origin.getZ() <= 19).isPresent(),
+                "planned " + site.map(found -> relative(helper, found.origin()).toShortString()).orElse("nothing"));
+        helper.succeed();
+    }
+
+    /**
+     * A torch where the pad's fill would go is not ground the paver may clear, so preparing the pad would fail every time:
+     * the pad is not planned. A torch lit before any plot was there is the case this guards.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void aPadWhoseFillATorchBlocksIsNotPlanned(GameTestHelper helper) {
+        Optional<PlotPlanner.Site> site = raisedStreetPad(helper, true);
+        helper.assertTrue(site.isEmpty(), "planned a pad at " + site.map(found -> relative(helper, found.origin()).toShortString()).orElse("")
+                + " over a torch its preparation cannot clear");
+        helper.succeed();
+    }
 }

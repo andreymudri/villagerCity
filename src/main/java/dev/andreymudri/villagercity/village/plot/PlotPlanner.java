@@ -21,6 +21,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.util.Mth;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.BushBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 
@@ -156,6 +157,10 @@ public final class PlotPlanner {
             }
             Floor floor = floor(groundYs, touching, allowEarthwork);
             if (!floor.accepted()) {
+                continue;
+            }
+            // A pad the paver would fail to prepare, every time, is no pad: a torch lit where its fill goes, say.
+            if (house && fillObstructed(level, area, floor.y(), Earthwork.MAX_COLUMN_STEP)) {
                 continue;
             }
             Site site = new Site(new BlockPos(minX, floor.y(), minZ), floor.earthwork());
@@ -391,6 +396,49 @@ public final class PlotPlanner {
             }
         }
         return null;
+    }
+
+    /**
+     * Whether a cell the paver would fill to bring {@code area} up to {@code floor} holds something it may not clear:
+     * a cell from each column's ground ({@link #fillGround}) up to just below the floor that has no collision shape and
+     * is neither replaceable (air, grass, a fluid) nor natural vegetation ({@link #clearableVegetation}). A torch or
+     * another player's block there stops the preparation. {@code maxDrop} is how far below the floor the fill reaches.
+     */
+    public static boolean fillObstructed(ServerLevel level, Footprint area, int floor, int maxDrop) {
+        for (int y = floor - maxDrop; y < floor; y++) {
+            for (int x = area.minX(); x <= area.maxX(); x++) {
+                for (int z = area.minZ(); z <= area.maxZ(); z++) {
+                    if (y < fillGround(level, x, z, floor, maxDrop)) {
+                        continue;
+                    }
+                    BlockPos pos = new BlockPos(x, y, z);
+                    BlockState state = level.getBlockState(pos);
+                    if (state.getCollisionShape(level, pos).isEmpty() && !state.is(BlockTags.REPLACEABLE) && !clearableVegetation(state)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Natural growth a paver clears like the cutting pass clears a mound: every vanilla flower, mushroom, sapling,
+     * crop and bush shares {@link BushBlock} as an ancestor, so this is general rather than a hand-picked tag list.
+     * A player's block (a torch, a chest) is never a {@code BushBlock} and stays an obstruction.
+     */
+    public static boolean clearableVegetation(BlockState state) {
+        return state.getBlock() instanceof BushBlock;
+    }
+
+    /** The first free y below the floor: one above the first solid block found searching down, capped at {@code floor - maxDrop}. */
+    public static int fillGround(ServerLevel level, int x, int z, int floor, int maxDrop) {
+        for (int y = floor - 1; y >= floor - maxDrop; y--) {
+            if (level.getBlockState(new BlockPos(x, y, z)).blocksMotion()) {
+                return y + 1;
+            }
+        }
+        return floor - maxDrop;
     }
 
     /** The village's street cells by column (x and z only). */

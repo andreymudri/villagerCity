@@ -7,12 +7,16 @@ import dev.andreymudri.villagercity.blueprint.Blueprints;
 import dev.andreymudri.villagercity.citizen.JobType;
 import dev.andreymudri.villagercity.job.LamplighterJob;
 import dev.andreymudri.villagercity.village.Footprint;
+import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
+import dev.andreymudri.villagercity.village.plot.PlotRules;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
@@ -166,5 +170,46 @@ public final class LightingTests {
         helper.assertTrue(helper.getBlockState(placed.relative(facing.getOpposite())).isSolidRender(helper.getLevel(), helper.absolutePos(placed.relative(facing.getOpposite()))),
                 "the torch's wall is not solid");
         helper.succeed();
+    }
+
+    /**
+     * A claimed plot the paver has not prepared yet, with the lamplighter standing on its margin at night. The margin is
+     * ground the paver still has to cut and fill, so no torch goes on it: a torch there would stop the preparation.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_lighting_plot_margin", timeoutTicks = TIMEOUT, skyAccess = true)
+    public static void neverPlacesATorchOnAPlotsMargin(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        helper.getLevel().setDayTime(NIGHT);
+        helper.runAtTickTime(TIMEOUT - 2, () -> helper.getLevel().setDayTime(GameTestSupport.DAY_TIME));
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        BuilderTests.stockedStorehouse(helper, village, Map.of(Items.TORCH, 64));
+        Plot plot = new Plot(UUID.randomUUID(), Blueprints.STARTER_HOUSE.toString(), helper.absolutePos(new BlockPos(28, 1, 28)),
+                new Vec3i(5, 5, 5), null, 0L, 0, false);
+        village.addPlot(plot);
+        Footprint margin = plot.footprint().inflate(PlotRules.MARGIN);
+        Villager villager = GameTestSupport.spawnVillager(helper, 27, 1, 27);
+        villager.getBrain().setSchedule(Schedule.EMPTY);
+        LamplighterJob job = new LamplighterJob();
+        CitizenTestSupport.enroll(villager, village, JobType.LAMPLIGHTER, ItemStack.EMPTY, job);
+        helper.onEachTick(() -> {
+            for (int x = margin.minX(); x <= margin.maxX(); x++) {
+                for (int z = margin.minZ(); z <= margin.maxZ(); z++) {
+                    BlockPos torch = new BlockPos(x, helper.absolutePos(BlockPos.ZERO).getY() + 1, z);
+                    if (helper.getLevel().getBlockState(torch).is(Blocks.TORCH)) {
+                        helper.getLevel().setDayTime(GameTestSupport.DAY_TIME);
+                        VillageTestSupport.remove(helper, village);
+                        helper.fail("a torch at " + torch.subtract(helper.absolutePos(BlockPos.ZERO)).toShortString()
+                                + " stands on the margin of an unprepared plot");
+                    }
+                }
+            }
+        });
+        helper.succeedWhen(() -> {
+            List<BlockPos> dark = darkColumns(helper, village);
+            helper.assertTrue(dark.isEmpty(), dark.size() + " dark columns, first " + (dark.isEmpty() ? "" : dark.get(0)));
+            helper.assertTrue(torchesAround(helper) > 0, "no torch was placed");
+            helper.getLevel().setDayTime(GameTestSupport.DAY_TIME);
+            VillageTestSupport.remove(helper, village);
+        });
     }
 }
