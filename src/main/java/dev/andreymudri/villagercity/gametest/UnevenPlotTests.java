@@ -317,6 +317,8 @@ public final class UnevenPlotTests {
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
         // A paver on the roster, with no villager behind it, so nothing prepares the plot during the test.
         village.setCitizen(UUID.randomUUID(), JobType.PAVER);
+        // A builder in a village with a paver only builds beside a street: one street cell on the lowest terrace (x = 24).
+        village.addStreetCell(helper.absolutePos(new BlockPos(24, 1, 30)), 1);
         Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
         StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, blueprint, 1);
         Map<Item, Long> stocked = storehouse.counts();
@@ -326,10 +328,12 @@ public final class UnevenPlotTests {
         helper.succeedWhen(() -> {
             helper.assertTrue(village.plots().size() == 1, "no plot claimed; waiting for " + job.waitingFor());
             Plot plot = village.plots().get(0);
-            if (plot.prepared() || !storehouse.counts().equals(stocked)) {
+            boolean onStreet = !PlotPlanner.touchingStreets(village, plot.footprint().inflate(PlotRules.MARGIN)).isEmpty();
+            if (plot.prepared() || !onStreet || !storehouse.counts().equals(stocked)) {
                 VillageTestSupport.remove(helper, village);
             }
             helper.assertFalse(plot.prepared(), "a sloped plot at " + relative(helper, plot.origin()) + " was claimed prepared");
+            helper.assertTrue(onStreet, "the plot at " + relative(helper, plot.origin()) + " does not open onto the street");
             helper.assertTrue(storehouse.counts().equals(stocked), "withdrew materials for an unprepared plot");
             helper.assertTrue("the paver to prepare the plot".equals(job.waitingFor()), "waiting for " + job.waitingFor());
             VillageTestSupport.remove(helper, village);

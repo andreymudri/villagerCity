@@ -5,10 +5,14 @@ import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
 import javax.annotation.Nullable;
 
-/** Prepares unprepared plots first ({@link SitePrep}), then lays queued paths to the bell ({@link PathWork}). */
+/**
+ * The paver's order of work: an unprepared plot to prepare ({@link SitePrep}), else one street run to grow the
+ * village's street graph ({@link StreetWork}), else it waits for {@code "room to grow"}. While a plot it is preparing
+ * waits on something (fill material, say), the paver waits with it rather than growing the streets.
+ */
 public final class PaverJob implements Job {
     private final SitePrep prep = new SitePrep();
-    private final PathWork paths = new PathWork();
+    private final StreetWork streets = new StreetWork();
     private @Nullable Job last;
     private @Nullable String waitingFor;
 
@@ -17,12 +21,21 @@ public final class PaverJob implements Job {
         waitingFor = null;
         Task task = prep.plan(ctx);
         last = prep;
-        if (task == null) {
-            task = paths.plan(ctx);
-            last = paths;
+        if (task != null) {
+            return task;
         }
+        if (prep.waitingFor() != null) {
+            waitingFor = prep.waitingFor();
+            return null;
+        }
+        task = streets.plan(ctx);
+        if (task == null && streets.waitingFor() == null) {
+            // The run just finished; start the next one now rather than idling a retry first.
+            task = streets.plan(ctx);
+        }
+        last = streets;
         if (task == null) {
-            waitingFor = prep.waitingFor() != null ? prep.waitingFor() : paths.waitingFor() != null ? paths.waitingFor() : "a plot to prepare or a path to lay";
+            waitingFor = streets.waitingFor() != null ? streets.waitingFor() : "room to grow";
         }
         return task;
     }
