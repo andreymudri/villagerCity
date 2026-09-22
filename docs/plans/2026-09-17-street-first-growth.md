@@ -32,8 +32,9 @@ Implements `docs/specs/2026-09-17-street-first-growth-design.md`.
 
 ## Destination
 
-A village on a mountain grows: the paver lays streets that climb the slope, houses attach to those streets at the
-street's own height, and `/villagercity village` shows the street graph. No plot is ever refused for being uneven —
+A village on a mountain grows: the paver lays 3-block-wide streets that climb the slope, houses attach to those
+streets at the street's own height with at least 5 blocks between neighbours, and `/villagercity village` shows the
+street graph. No plot is ever refused for being uneven —
 only for costing the paver more than it can move.
 
 ## Out of Scope
@@ -81,6 +82,7 @@ only for costing the paver more than it can move.
 - Create: `src/main/java/dev/andreymudri/villagercity/job/StreetWork.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/PathWork.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/PathRoute.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/gametest/PathTests.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/StreetTests.java`
 
 **Depends:** T1
@@ -94,16 +96,27 @@ only for costing the paver more than it can move.
       `MAX_STEP = 1` block above or below the previous, reusing `PathRoute`'s cell kinds and `PathWork`'s cell building
       (headroom clearing, support placement, `MakePath` surfacing) so both jobs build a cell the same way.
 - [ ] **Step 3:** A run stops early at `REACH = 64` blocks from the bell (Chebyshev), at a fluid it cannot bridge, at a
-      house, plot or storehouse footprint, or where the next cell would need more than one block of step. Each laid cell
-      is recorded with `addStreetCell(pos, endHops + 1)`.
+      house, plot or storehouse footprint, or where the next cell would need more than one block of step. Each laid
+      centre cell is recorded with `addStreetCell(pos, endHops + 1)`.
+- [ ] **Step 3b: streets are 3 wide** (user decision, 2026-09-22; spec "Width"). `WIDTH = 3`. Each centre cell is laid
+      with the two cells beside it across the run, at the centre cell's height, through the same cell building
+      (cut, fill or plank bridge). A side cell whose ground is more than `SIDE_STEP = 2` blocks off the centre stops the
+      run there, as does a side cell on a house, plot, storehouse or foreign path cell. All three cells go through
+      `addPathCell`; only the centre goes into the graph.
 - [ ] **Step 4:** Growth stops at `MAX_HOPS = 6`: an end at that depth is never extended.
 - [ ] **Step 5:** Delete the house-to-bell path job from `PathWork`: `VillageData.addHouse` no longer queues a path, the
       queue drains to empty, and `PathWork` keeps only the cell-building helpers `StreetWork` uses. Remove the door
       opening entirely — no route starts at a house door any more — and with it `OPEN_DOORS`, `closeIfClear` and
       `doorOutside`. A door recorded on the village from an older save is closed once and cleared (T1 step 3).
+      `PathTests` (30 GameTests) exercises the deleted house-to-bell job: queueing, routing from a door, door opening
+      and the no-route backoff. Delete the tests of deleted behaviour. Keep, pointed at the helpers `StreetWork` now
+      uses, every test of how a cell is built: headroom cutting, support fill, plank bridges, `MakePath` surfacing,
+      and `WorldPermissions` refusals. Say in the commit which tests went and why.
 - [ ] **Step 6:** Tests in `StreetTests`: a run climbs a 5-block slope one block per cell; a run stops at the reach
       limit; a run never crosses a house footprint; growth stops at 6 hops; a second run starts from the end the first
-      one left; no door is ever opened.
+      one left; no door is ever opened; every laid centre cell has both side cells laid at its own height and recorded
+      as path cells, while only the centre is in the graph; a run stops where a side cell would land on a house, and
+      where a side cell's ground is 3 blocks off the centre.
 
 ### Task 3: houses attach to streets
 
@@ -132,6 +145,12 @@ only for costing the paver more than it can move.
 - [ ] **Step 4:** Order candidate pads by: fewest hops on the street cell they touch, then least earthwork, then nearest
       the bell.
 - [ ] **Step 5:** Skip one pad in eight, decided by a hash of the pad's origin so the choice is stable across reloads.
+- [ ] **Step 5b: houses stand 5 apart** (user decision, 2026-09-22; spec "Spacing"). Add `PlotRules.HOUSE_GAP = 5`. A
+      pad is refused when its footprint comes within 5 columns of any house or plot footprint, along x or z. The gap
+      applies with or without streets, and not to the storehouse, the workshop or path cells. `PlotDiagnostics.explain`
+      names the gap when it is the rule that turned a spot down. Existing GameTests in this task's file set that place
+      a second plot beside a first are updated to respect the gap. If one outside it breaks, report `blocked`, naming the
+      test, rather than editing it.
 - [ ] **Step 6:** `PlotDiagnostics.explain` reports the new rules in place of the deleted one: the hop count of the
       nearest street cell (or that there is none), the earthwork the pad would need against the 80-block budget, the
       worst column against the 6-block step, and which of the four acceptance rules turned the spot down (spec, "Command
@@ -140,7 +159,8 @@ only for costing the paver more than it can move.
 - [ ] **Step 7:** Tests in `UnevenPlotTests`: a pad touching a street is chosen and its floor equals that street cell's
       Y; a pad needing 90 blocks of earth is refused while one needing 70 is taken; a pad with one column 7 off the floor
       is refused; an uneven pad the old flatness rule would have refused is now accepted; a village with no streets still
-      plans as before; the skip is stable when the same search runs twice. In `VillageCommandTests`, `why` explains a
+      plans as before; the skip is stable when the same search runs twice; a pad 4 columns from a house is refused and
+      one 5 columns away is accepted, both with and without streets. In `VillageCommandTests`, `why` explains a
       spot refused for earthwork and names the budget it broke.
 
 ### Task 4: the village grows streets when it has nowhere to build
@@ -175,8 +195,10 @@ only for costing the paver more than it can move.
 
 **Model:** mid
 
-- [ ] **Step 1:** README: describe street-first growth, the numbers (run of 8, 6 hops, reach 64, earth budget 80, column
-      step 6, one pad in eight skipped) and what `/villagercity village` now prints.
+- [ ] **Step 1:** README: describe street-first growth, the numbers (streets 3 wide, run of 8, 6 hops, reach 64, earth
+      budget 80, column step 6, houses at least 5 apart, one pad in eight skipped) and what `/villagercity village` now
+      prints.
 - [ ] **Step 2:** An end-to-end GameTest on a slope: a village with a storehouse, a paver, a builder and a lamplighter
-      lays streets, builds two houses on them at the streets' own heights, and lights the ground, with no wrong blocks
-      and no village state left behind.
+      lays 3-wide streets, builds two houses on them at the streets' own heights and at least 5 blocks apart, and lights
+      the ground, with no wrong blocks and no village state left behind. It runs with `skyAccess = true`: under the
+      barrier ceiling every column reads as lit.

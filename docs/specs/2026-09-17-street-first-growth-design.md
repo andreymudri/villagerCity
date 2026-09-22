@@ -40,6 +40,19 @@ The bell's own cell is the root, at hop 0.
 
 Street ends are saved on the village with their hop count, so growth survives a reload.
 
+**Width (user decision, 2026-09-22).** A street is **3 blocks wide**, as in a vanilla village. A one-block path is
+too narrow for most uses. A run is straight, so every centre cell has a well-defined left and right neighbour
+across the run:
+
+- the graph records the **centre line** only, one `StreetCell` per centre cell with its hop count;
+- each centre cell is laid with its two side cells **at the centre cell's own height**, so the street is level
+  across its width. A side cell is cut or filled to that height when its ground is at most 2 blocks off;
+- every one of the three cells is a path cell (`pathCells`), so plots never cover them and the lamplighter lights
+  them. Only the centre cell is a street cell in the graph;
+- a run stops early wherever **any** of the three cells would cross a house, plot, storehouse or path cell that is
+  not its own, meet a fluid it cannot bridge, or need a side cell more than 2 blocks off the centre;
+- a bridge is 3 cells wide as well.
+
 **Reach and hops.** A street cell is only laid within **64** blocks of the bell (Chebyshev, up from 48) and at most
 **6 hops** from it, one hop being one street run. Six runs of up to 8 cells climbing 1 block each is up to 48 blocks
 of climb, which is how a vanilla village walks up a mountain.
@@ -48,6 +61,11 @@ of climb, which is how a vanilla village walks up a mountain.
 
 A plot is a **path-adjacent pad**: its footprint plus margin touches at least one path cell, and it does not
 overlap any house, plot, storehouse or path.
+
+**Spacing (user decision, 2026-09-22).** A pad's footprint stands at least **5 blocks** from every other house and
+plot footprint: at least 5 open columns lie between them along x or along z. This is `PlotRules.HOUSE_GAP = 5`, and
+it applies whether or not the village has streets. It does not apply to the storehouse, the workshop or a street,
+which the pad may still touch through its one-block margin.
 
 - **The floor is the path cell's height**, not the mean of the ground and not the highest column. The house sits
   level with the street it opens onto, and the paver makes the ground meet it.
@@ -98,6 +116,8 @@ GameTests cover:
 - a pad needing more than 80 blocks of earth, or one column more than 6 off, is refused;
 - an uneven pad within budget is accepted, where today's flatness rule would refuse it;
 - a village without a paver still only takes pads needing no earthwork;
+- a street is 3 cells wide, level across its width, and all three cells are path cells;
+- a pad less than 5 blocks from another house or plot is refused, and one exactly 5 blocks away is accepted;
 - growth crosses a 20-block rise in several hops, and never in one;
 - the skip rule leaves gaps and is stable across a reload;
 - street ends, hop counts and the graph round-trip through the village codec;
