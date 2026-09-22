@@ -49,8 +49,9 @@ import net.minecraft.world.phys.Vec3;
 /**
  * Takes over a released plot once its retry time has passed, or else claims a new plot once the storehouse holds a
  * full blueprint's materials. In a village with a paver the new plot must open onto a street ({@link PlotPlanner}
- * chooses it), so until the paver has laid one the builder waits for {@code "a street to build on"}; a village with no
- * paver builds where it can without streets. A plot needing earthwork is only claimed while the village has a paver,
+ * chooses it), so until the paver has laid one the builder waits for {@code "a street to build on"}. A village with no
+ * paver, or whose paver cannot start a street at the bell at all ({@link StreetWork#nextRun} is empty on an empty
+ * graph), builds where it can without streets rather than waiting forever. A plot needing earthwork is only claimed while the village has a paver,
  * and the builder waits until the paver has prepared it, handing a plot that stays unprepared back after
  * {@link #PREPARATION_WAIT_TICKS} of working time. Then it withdraws what is missing, and clears and places blocks in
  * build order. Progress lives in the world and the plot record, so a reloaded or replacement builder resumes by
@@ -339,10 +340,12 @@ public final class BuilderJob implements Job {
             waitingFor = "materials: " + shortfall(level, storehouse, blueprint.get().requiredMaterials());
             return Optional.empty();
         }
-        // A village with a paver builds only beside its streets, which the paver grows while nothing is buildable.
+        // A village with a paver builds only beside its streets, which the paver grows while nothing is buildable. When
+        // no street can leave the bell at all, waiting would wedge the village: it builds without streets instead.
         boolean paver = village.jobCount(JobType.PAVER) > 0;
-        String noPlot = paver ? "a street to build on" : "a buildable plot near the bell";
-        if (paver && village.streets().isEmpty()) {
+        boolean streetBound = paver && (!village.streets().isEmpty() || StreetWork.nextRun(level, village).isPresent());
+        String noPlot = streetBound ? "a street to build on" : "a buildable plot near the bell";
+        if (streetBound && village.streets().isEmpty()) {
             waitingFor = noPlot;
             return Optional.empty();
         }

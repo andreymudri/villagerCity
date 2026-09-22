@@ -26,6 +26,7 @@ import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Blocks;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -40,16 +41,32 @@ public final class StreetGrowthTests {
     /** The rise {@link #aSlopeIsCrossedInSeveralHopsAndNeverInOne} climbs. */
     private static final int RISE = 20;
 
+    /**
+     * A paver running {@link PaverJob}, also put on the village's roster: enrolling alone does not add it to an unmanaged
+     * village, and without it {@code jobCount(PAVER)} is 0, so a builder would take the no-paver path.
+     */
     private static Villager enrollPaver(GameTestHelper helper, VillageData village, int x, int y, int z) {
         Villager villager = GameTestSupport.spawnVillager(helper, x, y, z);
         CitizenTestSupport.enroll(villager, village, JobType.PAVER, new ItemStack(Items.STONE_PICKAXE), new PaverJob());
+        village.setCitizen(villager.getUUID(), JobType.PAVER);
         return villager;
     }
 
+    /** A builder running {@link BuilderJob}, also put on the village's roster (see {@link #enrollPaver}). */
     private static Villager enrollBuilder(GameTestHelper helper, VillageData village, int x, int y, int z) {
         Villager villager = GameTestSupport.spawnVillager(helper, x, y, z);
         CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
+        village.setCitizen(villager.getUUID(), JobType.BUILDER);
         return villager;
+    }
+
+    /** Fails unless the house touches a street and its floor is at the height of a street it touches. */
+    private static void assertOnAStreet(GameTestHelper helper, VillageData village, BuildingRecord house) {
+        List<StreetCell> touching = PlotPlanner.touchingStreets(village, house.footprint().inflate(PlotRules.MARGIN));
+        helper.assertFalse(touching.isEmpty(), "the house at " + StreetTests.relative(helper, house.origin()).toShortString()
+                + " touches no street");
+        helper.assertTrue(touching.stream().anyMatch(cell -> cell.pos().getY() == house.origin().getY()),
+                "the house floor y " + house.origin().getY() + " is not the height of a street it touches: " + touching);
     }
 
     private static String waitingFor(Villager villager) {
@@ -79,12 +96,52 @@ public final class StreetGrowthTests {
         helper.succeedWhen(() -> {
             helper.assertTrue(village.houseCount() == 1, "houses " + village.houseCount() + ", streets " + village.streets().size()
                     + ", plots " + village.plots().stream().map(Plot::origin).toList());
-            BuildingRecord house = village.houses().get(0);
-            List<StreetCell> touching = PlotPlanner.touchingStreets(village, house.footprint().inflate(PlotRules.MARGIN));
-            helper.assertFalse(touching.isEmpty(), "the house at " + house.origin().subtract(helper.absolutePos(BlockPos.ZERO)).toShortString()
-                    + " touches no street");
-            helper.assertTrue(touching.stream().anyMatch(cell -> cell.pos().getY() == house.origin().getY()),
-                    "the house floor y " + house.origin().getY() + " is not the height of a street it touches: " + touching);
+            assertOnAStreet(helper, village, village.houses().get(0));
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_street_growth_pillar_bell", timeoutTicks = 12000)
+    public static void aBellOnAPillarStillStartsAStreet(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // The bell stands on a 2-block stone pillar, 2 blocks above the ground beside it.
+        helper.setBlock(BELL, Blocks.STONE);
+        helper.setBlock(BELL.above(), Blocks.STONE);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL.above(2), 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        BuilderTests.stockedStorehouse(helper, village, blueprint, 1);
+        enrollPaver(helper, village, 28, 1, 28);
+        enrollBuilder(helper, village, 22, 1, 28);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.houseCount() == 1, "houses " + village.houseCount() + ", streets " + village.streets().size()
+                    + ", plots " + village.plots().size());
+            helper.assertTrue(village.streets().stream().allMatch(cell -> StreetTests.relative(helper, cell.pos()).getY() == 1),
+                    "a street cell is not on the ground: " + village.streets());
+            assertOnAStreet(helper, village, village.houses().get(0));
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_street_growth_walled_bell", timeoutTicks = 8000)
+    public static void aBellNoStreetCanLeaveStillGetsAHouse(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // A 3-block stone pillar on each corner beside the bell: every first slice has a side cell 3 blocks off its
+        // centre, so no street can start at the bell.
+        for (BlockPos corner : List.of(BELL.offset(-1, 0, -1), BELL.offset(1, 0, -1), BELL.offset(-1, 0, 1), BELL.offset(1, 0, 1))) {
+            for (int y = 0; y < 3; y++) {
+                helper.setBlock(corner.above(y), Blocks.STONE);
+            }
+        }
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        BuilderTests.stockedStorehouse(helper, village, blueprint, 1);
+        Villager paver = enrollPaver(helper, village, 28, 1, 28);
+        enrollBuilder(helper, village, 22, 1, 28);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.houseCount() == 1, "houses " + village.houseCount() + ", streets " + village.streets().size()
+                    + ", plots " + village.plots().size());
+            helper.assertTrue(village.streets().isEmpty(), "a street left the walled bell: " + village.streets());
+            helper.assertTrue("room to grow".equals(waitingFor(paver)), "the paver is waiting for " + waitingFor(paver));
             VillageTestSupport.remove(helper, village);
         });
     }
@@ -188,8 +245,47 @@ public final class StreetGrowthTests {
                 helper.assertFalse(claimed[0].contains(cell.getX(), cell.getZ()),
                         "path cell " + StreetTests.relative(helper, cell).toShortString() + " lies inside the plot claimed mid-run");
             }
-            helper.assertTrue(StreetTests.withHops(village, 1).size() == 4,
-                    "the first run has " + StreetTests.withHops(village, 1).size() + " cells instead of stopping at the plot");
+            // The plot covers x = 9 to 13 and its margin x = 8, which SitePrep may cut or fill: the run ends at x = 7.
+            helper.assertTrue(StreetTests.withHops(village, 1).size() == 3,
+                    "the first run has " + StreetTests.withHops(village, 1).size() + " cells instead of stopping at the plot's margin");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_street_growth_late_unprepared", timeoutTicks = 6000)
+    public static void aRunNeverLaysACellOnTheMarginOfAPlotClaimedAfterItStarted(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // Ground rising one block per column from x = 5 to x = 7, then flat at y = 3.
+        StreetTests.terrain(helper, (x, z) -> Math.max(0, Math.min(3, x - 4)));
+        VillageData village = StreetTests.streetVillage(helper, StreetTests.ROOT, 0);
+        Villager paver = enrollPaver(helper, village, 4, 1, 20);
+        // Once the run has laid its first slice, an unprepared plot is claimed from x = 7. Its margin, x = 6, is ground
+        // the paver's SitePrep levels to the plot's floor before the run would resume.
+        Footprint[] margin = new Footprint[1];
+        UUID[] plotId = new UUID[1];
+        helper.onEachTick(() -> {
+            if (plotId[0] == null && !StreetTests.withHops(village, 1).isEmpty()) {
+                Plot plot = new Plot(UUID.randomUUID(), Blueprints.STARTER_HOUSE.toString(), helper.absolutePos(new BlockPos(7, 2, 23)),
+                        new Vec3i(3, 3, 3), null, 0L, 0, false);
+                village.addPlot(plot);
+                margin[0] = plot.footprint().inflate(PlotRules.MARGIN);
+                plotId[0] = plot.id();
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(plotId[0] != null, "the run never laid a slice");
+            helper.assertTrue(village.plots().stream().anyMatch(plot -> plot.id().equals(plotId[0]) && plot.prepared()),
+                    "the plot is not prepared yet");
+            helper.assertTrue(StreetTests.ROOM_TO_GROW.equals(waitingFor(paver)), "the paver is waiting for " + waitingFor(paver));
+            for (BlockPos cell : village.pathCells()) {
+                BlockPos below = StreetTests.relative(helper, cell).below();
+                helper.assertTrue(helper.getBlockState(below).isSolid(), "path cell " + below.above().toShortString() + " stands on "
+                        + helper.getBlockState(below));
+            }
+            for (StreetCell cell : village.streets()) {
+                helper.assertFalse(margin[0].contains(cell.pos().getX(), cell.pos().getZ()),
+                        "street cell " + StreetTests.relative(helper, cell.pos()).toShortString() + " lies in the plot's margin");
+            }
             VillageTestSupport.remove(helper, village);
         });
     }

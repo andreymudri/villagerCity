@@ -8,6 +8,7 @@ import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageRegistry;
 import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
+import dev.andreymudri.villagercity.village.plot.PlotRules;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -29,7 +30,8 @@ import net.minecraft.tags.FluidTags;
  * {@link #WIDTH} cells wide. Every cell is classified by {@link PathRoute#cellAt} and built by
  * {@link PathWork#planCell}. The three cells of one slice across the street are recorded together once all three are
  * built: the sides as path cells, the centre as a street cell one hop deeper than the end the run started from. A run
- * ends before a slice that a house or plot recorded since the run was laid out now covers.
+ * ends before a slice that a house recorded since the run was laid out now covers, or that a plot claimed since then
+ * covers with its footprint or its {@link PlotRules#MARGIN}, the ground the paver levels when it prepares the plot.
  *
  * <p>The run being laid, and the cells this job gave up on after {@link PathWork#MAX_CONSECUTIVE_FAILURES} failed
  * tasks, are held only in memory: a fresh job starts a new run from whichever end the graph now has.
@@ -92,7 +94,7 @@ public final class StreetWork implements Job {
             slices = layout(level, village, run, refused, RUN_LENGTH);
         }
         int hops = run.end().hops() + 1;
-        List<Footprint> occupied = village.occupiedFootprints();
+        List<Footprint> occupied = blocking(village);
         for (Slice slice : slices) {
             if (covered(slice, occupied)) {
                 // A plot claimed, or a house recorded, since the run was laid out: the run ends before it.
@@ -149,6 +151,16 @@ public final class StreetWork implements Job {
         return false;
     }
 
+    /**
+     * The footprints no street cell may be laid on: everything the village occupies, with each plot grown by
+     * {@link PlotRules#MARGIN}, because preparing a plot cuts and fills its margin to the plot's floor.
+     */
+    private static List<Footprint> blocking(VillageData village) {
+        List<Footprint> blocking = new ArrayList<>(village.occupiedFootprints());
+        village.plots().forEach(plot -> blocking.add(plot.footprint().inflate(PlotRules.MARGIN)));
+        return blocking;
+    }
+
     /** Forgets the run being laid, so the next {@link #plan} starts a new one from the graph as it now is. */
     private void dropRun(BlockPos obstruction) {
         if (run != null) {
@@ -161,7 +173,8 @@ public final class StreetWork implements Job {
     /**
      * The run to lay next: from the street end with the fewest hops (below {@link #MAX_HOPS}), preferring an end level
      * with the cell it grew from, in the direction that takes it farthest from the bell among those whose first slice
-     * can be laid. Empty when no end can grow. An empty graph grows from the bell: its own cell is the root end, at hop 0.
+     * can be laid. Empty when no end can grow. An empty graph grows from the bell: its own cell is the root end, at hop 0,
+     * and the first centre of a run from it sits on its own column's ground however high the bell hangs.
      */
     public static Optional<Run> nextRun(ServerLevel level, VillageData village) {
         return nextRun(level, village, Set.of());
@@ -192,14 +205,16 @@ public final class StreetWork implements Job {
      * centre beyond {@link #REACH}, more than {@link #MAX_STEP} above or below the previous centre, on a fluid other
      * than water, or on a column {@link PathRoute#cellAt} refuses; a side cell whose ground is more than {@link
      * #SIDE_STEP} off the centre, or that {@link PathRoute#cellAt} refuses at the centre's height; or any of the three
-     * on a house, plot, storehouse, the bell, a street cell, or a path cell that is not one of the end's own side cells.
+     * on a house, plot or its margin, storehouse, the bell, a street cell, or a path cell that is not one of the end's own
+     * side cells. The first centre of a run from the bell root is not held to {@link #MAX_STEP} from the bell block,
+     * which may stand on a pillar or hang from a beam above the ground beside it.
      */
     public static List<Slice> layout(ServerLevel level, VillageData village, Run run) {
         return layout(level, village, run, Set.of(), RUN_LENGTH);
     }
 
     private static List<Slice> layout(ServerLevel level, VillageData village, Run run, Set<Long> refused, int limit) {
-        List<Footprint> occupied = village.occupiedFootprints();
+        List<Footprint> occupied = blocking(village);
         Set<Long> graph = new HashSet<>();
         village.streets().forEach(cell -> graph.add(column(cell.pos().getX(), cell.pos().getZ())));
         BlockPos end = run.end().pos();
@@ -208,6 +223,13 @@ public final class StreetWork implements Job {
         Direction across = forward.getClockWise();
         List<Slice> slices = new ArrayList<>();
         int previousY = end.getY();
+        if (graph.isEmpty() && end.equals(bell)) {
+            // The bell root: the first centre is measured against its own ground, not against the bell block.
+            PathRoute.Ground first = PathRoute.groundAt(level, end.getX() + forward.getStepX(), end.getZ() + forward.getStepZ());
+            if (first.present()) {
+                previousY = first.y();
+            }
+        }
         for (int i = 1; i <= limit; i++) {
             int x = end.getX() + forward.getStepX() * i;
             int z = end.getZ() + forward.getStepZ() * i;
