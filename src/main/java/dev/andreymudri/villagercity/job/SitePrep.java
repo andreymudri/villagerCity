@@ -17,6 +17,7 @@ import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageRegistry;
+import dev.andreymudri.villagercity.village.plot.PlotPlanner;
 import dev.andreymudri.villagercity.village.plot.PlotRules;
 import java.util.HashMap;
 import java.util.Map;
@@ -30,7 +31,6 @@ import net.minecraft.tags.BlockTags;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.BushBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -86,7 +86,7 @@ public final class SitePrep implements Job {
         }
 
         FillTarget fillTarget = findFillCandidate(level, area, floor);
-        if (fillTarget == null && hasFillObstruction(level, area, floor)) {
+        if (fillTarget == null && PlotPlanner.fillObstructed(level, area, floor, MAX_DROP)) {
             recordFailure(now, plot.id());
             return null;
         }
@@ -94,7 +94,7 @@ public final class SitePrep implements Job {
             BlockPos fillCell = fillTarget.pos();
             if (fillTarget.needsClearing()) {
                 return TaskSequence.of(MoveTo.digOut(fillCell, BuilderJob.WORK_REACH),
-                        new VerifiedBreak(fillCell, (lvl, pos) -> isClearableVegetation(lvl.getBlockState(pos))));
+                        new VerifiedBreak(fillCell, (lvl, pos) -> PlotPlanner.clearableVegetation(lvl.getBlockState(pos))));
             }
             Optional<BlockState> fillState = FillMaterials.choose(inventory);
             if (fillState.isPresent()) {
@@ -226,7 +226,7 @@ public final class SitePrep implements Job {
         for (int y = floor - MAX_DROP; y < floor; y++) {
             for (int x = area.minX(); x <= area.maxX(); x++) {
                 for (int z = area.minZ(); z <= area.maxZ(); z++) {
-                    if (y < columnGround(level, x, z, floor)) {
+                    if (y < PlotPlanner.fillGround(level, x, z, floor, MAX_DROP)) {
                         continue;
                     }
                     BlockPos pos = new BlockPos(x, y, z);
@@ -237,51 +237,13 @@ public final class SitePrep implements Job {
                     if (state.is(BlockTags.REPLACEABLE)) {
                         return new FillTarget(pos, false);
                     }
-                    if (isClearableVegetation(state)) {
+                    if (PlotPlanner.clearableVegetation(state)) {
                         return new FillTarget(pos, true);
                     }
                 }
             }
         }
         return null;
-    }
-
-    /** True when some cell in the fillable range has no collision shape but is neither open nor clearable vegetation. */
-    private static boolean hasFillObstruction(ServerLevel level, Footprint area, int floor) {
-        for (int y = floor - MAX_DROP; y < floor; y++) {
-            for (int x = area.minX(); x <= area.maxX(); x++) {
-                for (int z = area.minZ(); z <= area.maxZ(); z++) {
-                    if (y < columnGround(level, x, z, floor)) {
-                        continue;
-                    }
-                    BlockPos pos = new BlockPos(x, y, z);
-                    BlockState state = level.getBlockState(pos);
-                    if (state.getCollisionShape(level, pos).isEmpty() && !state.is(BlockTags.REPLACEABLE) && !isClearableVegetation(state)) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Natural growth a paver clears like the cutting pass clears a mound: every vanilla flower, mushroom, sapling,
-     * crop and bush shares {@link BushBlock} as an ancestor, so this is general rather than a hand-picked tag list.
-     * A player's block (a torch, a chest) is never a {@code BushBlock} and stays an obstruction.
-     */
-    private static boolean isClearableVegetation(BlockState state) {
-        return state.getBlock() instanceof BushBlock;
-    }
-
-    /** The first free y below the floor: one above the first solid block found searching down, capped at {@code floor - MAX_DROP}. */
-    private static int columnGround(ServerLevel level, int x, int z, int floor) {
-        for (int y = floor - 1; y >= floor - MAX_DROP; y--) {
-            if (level.getBlockState(new BlockPos(x, y, z)).blocksMotion()) {
-                return y + 1;
-            }
-        }
-        return floor - MAX_DROP;
     }
 
     /**

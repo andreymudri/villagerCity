@@ -11,6 +11,8 @@ import dev.andreymudri.villagercity.citizen.task.Withdraw;
 import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
+import dev.andreymudri.villagercity.village.plot.PlotRules;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -94,6 +96,7 @@ public final class LamplighterJob implements Job {
             return TaskSequence.of(MoveTo.digOut(storehouse, 2.5), new Withdraw(storehouse, Map.of(Items.TORCH, (int) Math.min(MAX_TORCHES, stored))));
         }
         List<Footprint> occupied = village.occupiedFootprints();
+        List<Footprint> noTorch = noTorchFootprints(village);
         BlockPos from = ctx.villager().blockPosition();
         while (true) {
             Optional<BlockPos> nearest = spots.nearest(from, avoidUntil::containsKey);
@@ -107,7 +110,7 @@ public final class LamplighterJob implements Job {
             if (!DarkSpots.isDark(level, occupied, candidate)) {
                 continue;
             }
-            BlockPos cell = torchCell(level, village, occupied, candidate);
+            BlockPos cell = torchCell(level, village, noTorch, candidate);
             if (cell == null) {
                 avoidUntil.put(candidate, now + AVOID_TICKS);
                 continue;
@@ -116,6 +119,16 @@ public final class LamplighterJob implements Job {
             target = cell;
             return TaskSequence.of(MoveTo.digOut(cell, 2.5), new PlaceBlock(cell, Blocks.TORCH.defaultBlockState(), Items.TORCH));
         }
+    }
+
+    /**
+     * Where no torch may stand: everything the village occupies, and each plot grown by {@link PlotRules#MARGIN}, the
+     * ground the paver cuts and fills when it prepares the plot and could not clear a torch from.
+     */
+    private static List<Footprint> noTorchFootprints(VillageData village) {
+        List<Footprint> footprints = new ArrayList<>(village.occupiedFootprints());
+        village.plots().forEach(plot -> footprints.add(plot.footprint().inflate(PlotRules.MARGIN)));
+        return footprints;
     }
 
     /** The spot itself, or for a spot on a laid path the first neighbouring column that takes a torch; null when none does. */
@@ -136,7 +149,7 @@ public final class LamplighterJob implements Job {
         return null;
     }
 
-    /** A free cell outside every village footprint where a standing torch holds. */
+    /** A free cell outside every one of the {@code occupied} footprints where a standing torch holds. */
     private static boolean takesTorch(ServerLevel level, List<Footprint> occupied, BlockPos feet) {
         if (occupied.stream().anyMatch(footprint -> footprint.contains(feet.getX(), feet.getZ()))) {
             return false;

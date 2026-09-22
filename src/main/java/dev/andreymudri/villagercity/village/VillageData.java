@@ -1,7 +1,7 @@
 package dev.andreymudri.villagercity.village;
 
-import dev.andreymudri.villagercity.VillagerCity;
 import dev.andreymudri.villagercity.citizen.JobType;
+import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -43,6 +43,9 @@ public final class VillageData {
     /** The x and z of each of {@link #pathCells}, packed with {@code BlockPos.asLong(x, 0, z)}, for {@link #isPathColumn}. */
     private final Set<Long> pathColumns;
     private final List<BlockPos> pathQueue;
+    /** The street graph, in the order its cells were laid; {@link #streetEnds} depends on that order. */
+    private final List<StreetCell> streets;
+    private final Set<BlockPos> openedDoors;
     private @Nullable BlockPos craftingTablePos;
     private boolean managed;
     /** Game time before which no builder or storehouse placement searches this village for a spot again; not saved. */
@@ -55,12 +58,13 @@ public final class VillageData {
     private List<String> artisanOrders = List.of();
 
     public VillageData(UUID id, BlockPos center, int radius) {
-        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), Map.of(), List.of(), List.of(), VillageWorks.EMPTY, true);
+        this(id, center, radius, VillageAge.DARK, null, List.of(), List.of(), new ContributionLedger(), Map.of(), Map.of(), List.of(), List.of(), VillageWorks.EMPTY, List.of(), true);
     }
 
     public VillageData(UUID id, BlockPos center, int radius, VillageAge age, @Nullable BlockPos storehousePos,
                        List<BuildingRecord> houses, List<Plot> plots, ContributionLedger ledger, Map<UUID, JobType> citizens,
-                       Map<UUID, Long> storehouseDebt, List<BlockPos> felling, List<BlockPos> failedPlots, VillageWorks works, boolean managed) {
+                       Map<UUID, Long> storehouseDebt, List<BlockPos> felling, List<BlockPos> failedPlots, VillageWorks works,
+                       List<BlockPos> openedDoors, boolean managed) {
         this.id = id;
         this.center = center.immutable();
         this.radius = radius;
@@ -80,6 +84,10 @@ public final class VillageData {
         works.pathCells().forEach(this::addPathCell);
         this.pathQueue = new ArrayList<>();
         works.pathQueue().forEach(this::queuePath);
+        this.streets = new ArrayList<>();
+        works.streets().forEach(cell -> addStreetCell(cell.pos(), cell.hops()));
+        this.openedDoors = new LinkedHashSet<>();
+        openedDoors.forEach(this::recordOpenedDoor);
         setCraftingTablePos(works.craftingTable().orElse(null));
         this.managed = managed;
     }
@@ -227,6 +235,67 @@ public final class VillageData {
         pathColumns.add(BlockPos.asLong(cell.getX(), 0, cell.getZ()));
     }
 
+    /** The street graph: every laid street cell with its hop count, in the order they were laid. */
+    public List<StreetCell> streets() {
+        return List.copyOf(streets);
+    }
+
+    /**
+     * Records a laid street cell with its hop count, and records it as a path cell too. A cell already in the graph
+     * keeps the hop count it was first recorded with.
+     */
+    public void addStreetCell(BlockPos pos, int hops) {
+        BlockPos cell = pos.immutable();
+        addPathCell(cell);
+        if (streets.stream().noneMatch(street -> street.pos().equals(cell))) {
+            streets.add(new StreetCell(cell, hops));
+        }
+    }
+
+    /**
+     * The frontier of the street graph: the cells no other cell grew from. A cell grew from another when it was laid
+     * after it, at a hop count no lower, one block or less away along x, y and z (diagonals included). The last cell of
+     * a run is therefore an end until a later run starts beside it, and every cell before it in its run is not.
+     */
+    public List<StreetCell> streetEnds() {
+        List<StreetCell> ends = new ArrayList<>();
+        for (int i = 0; i < streets.size(); i++) {
+            StreetCell cell = streets.get(i);
+            boolean grownFrom = false;
+            for (int j = i + 1; j < streets.size() && !grownFrom; j++) {
+                StreetCell later = streets.get(j);
+                grownFrom = later.hops() >= cell.hops() && isNeighbour(cell.pos(), later.pos());
+            }
+            if (!grownFrom) {
+                ends.add(cell);
+            }
+        }
+        return ends;
+    }
+
+    private static boolean isNeighbour(BlockPos a, BlockPos b) {
+        return Math.abs(a.getX() - b.getX()) <= 1 && Math.abs(a.getY() - b.getY()) <= 1 && Math.abs(a.getZ() - b.getZ()) <= 1;
+    }
+
+    /** The highest hop count in the street graph, or 0 when it has no cells. */
+    public int deepestHops() {
+        return streets.stream().mapToInt(StreetCell::hops).max().orElse(0);
+    }
+
+    /** Doors the paver opened and has not closed yet. Saved, so a door opened before a restart is still known after it. */
+    public List<BlockPos> openedDoors() {
+        return List.copyOf(openedDoors);
+    }
+
+    public void recordOpenedDoor(BlockPos door) {
+        openedDoors.add(door.immutable());
+    }
+
+    /** Forgets an opened door, once it is closed. Returns whether it was recorded. */
+    public boolean clearOpenedDoor(BlockPos door) {
+        return openedDoors.remove(door);
+    }
+
     /** Origins of houses still waiting for a path to the bell, oldest first. */
     public List<BlockPos> pathQueue() {
         return List.copyOf(pathQueue);
@@ -251,9 +320,9 @@ public final class VillageData {
         this.craftingTablePos = pos == null ? null : pos.immutable();
     }
 
-    /** The saved form of the paths, the path queue and the workshop blocks. */
+    /** The saved form of the paths, the path queue, the street graph and the workshop blocks. */
     public VillageWorks works() {
-        return new VillageWorks(pathCells(), pathQueue(), Optional.ofNullable(craftingTablePos));
+        return new VillageWorks(pathCells(), pathQueue(), streets(), Optional.ofNullable(craftingTablePos));
     }
 
     public int darkSpotCount() {
@@ -289,12 +358,9 @@ public final class VillageData {
         return houses.size();
     }
 
-    /** Records a finished building; one built from a village blueprint ({@code villagercity:}) also queues a path to the bell. */
+    /** Records a finished building. Houses stand on streets, so none queues a path to the bell. */
     public void addHouse(BuildingRecord house) {
         houses.add(house);
-        if (house.blueprint().startsWith(VillagerCity.MODID + ":")) {
-            queuePath(house.origin());
-        }
         radius = Math.max(radius, farthestCorner(house.footprint()) + RADIUS_PADDING);
     }
 

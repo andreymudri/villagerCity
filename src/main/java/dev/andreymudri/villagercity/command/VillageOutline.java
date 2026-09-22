@@ -7,6 +7,7 @@ import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.plot.PlotPlanner;
 import dev.andreymudri.villagercity.village.VillageRegistry;
+import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -23,8 +24,9 @@ import org.joml.Vector3f;
 
 /**
  * Draws the village's areas as coloured dust for whoever asked, until their view expires. White is the village itself
- * (its radius around the bell), orange the ground the builder searches for a plot, blue a plot in progress and green a
- * finished house. Every point sits on the surface, so the outline follows the terrain.
+ * (its radius around the bell), orange the ground the builder searches for a plot, blue a plot in progress, green a
+ * finished house and magenta a street cell, with a second magenta dust a block higher over each street end. Area points
+ * sit on the surface, so the outline follows the terrain; street dust sits in the street cell itself.
  */
 @EventBusSubscriber(modid = VillagerCity.MODID)
 public final class VillageOutline {
@@ -41,6 +43,7 @@ public final class VillageOutline {
     private static final DustParticleOptions SEARCH = dust(0xFF9A28);
     private static final DustParticleOptions PLOT = dust(0x3FA9F5);
     private static final DustParticleOptions HOUSE = dust(0x4BD16A);
+    private static final DustParticleOptions STREET = dust(0xE040C8);
 
     /** Who is watching which village, and the game time their view ends; not saved, cleared on stop. */
     private static final Map<UUID, Watch> WATCHES = new LinkedHashMap<>();
@@ -102,6 +105,12 @@ public final class VillageOutline {
         for (BuildingRecord house : village.houses()) {
             outline(level, player, house.footprint(), HOUSE);
         }
+        for (StreetCell cell : village.streets()) {
+            dustAt(level, player, cell.pos(), STREET);
+        }
+        for (StreetCell end : village.streetEnds()) {
+            dustAt(level, player, end.pos().above(), STREET);
+        }
     }
 
     /** The square of {@code reach} blocks around the bell, the same Chebyshev shape the plot search uses. */
@@ -119,6 +128,14 @@ public final class VillageOutline {
             point(level, player, area.minX(), z, color);
             point(level, player, area.maxX(), z, color);
         }
+    }
+
+    /** One dust in the middle of {@code pos}, skipping cells that are not loaded or are too far to see. */
+    private static void dustAt(ServerLevel level, ServerPlayer player, BlockPos pos, DustParticleOptions color) {
+        if (!level.isLoaded(pos) || player.distanceToSqr(pos.getX() + 0.5, player.getY(), pos.getZ() + 0.5) > VIEW_DISTANCE * VIEW_DISTANCE) {
+            return;
+        }
+        level.sendParticles(player, color, true, pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5, 1, 0, 0, 0, 0);
     }
 
     /** One dust a block above the surface, skipping columns that are not loaded or are too far to see. */
