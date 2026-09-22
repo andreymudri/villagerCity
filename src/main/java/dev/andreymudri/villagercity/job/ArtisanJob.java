@@ -24,6 +24,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.level.block.Blocks;
 
 /**
@@ -88,24 +89,70 @@ public final class ArtisanJob implements Job {
                 }
                 continue;
             }
-            if (!storehouseHolds(storehouse, demand.reserved(), step.inputs())) {
+            // As many of the step's runs as the storehouse can pay for today. A step planned for more than the stock
+            // covers -- a lamplighter's torches, whose missing fuel the planner filled with charcoal nobody will make --
+            // still makes what it can, so the house's one torch is not held back by the other fifteen.
+            CraftStep affordable = affordable(storehouse, demand.reserved(), step);
+            if (affordable == null) {
                 continue;
             }
-            return craft(storehousePos, table, step);
+            return craft(storehousePos, table, affordable);
         }
         waitingFor = !unsmeltable.isEmpty() ? "materials: " + unsmeltable.stream().map(ArtisanJob::path).collect(Collectors.joining(", "))
                 : result.unmet().isEmpty() ? "no orders" : "materials: " + shortfall(result);
         return null;
     }
 
-    /** Whether the storehouse holds every one of these amounts on top of what other jobs are counted on having. */
-    private static boolean storehouseHolds(StorehouseBlockEntity storehouse, Map<Item, Integer> reserved, Map<Item, Integer> wanted) {
-        for (Map.Entry<Item, Integer> entry : wanted.entrySet()) {
-            if (storehouse.count(entry.getKey()) - reserved.getOrDefault(entry.getKey(), 0) < entry.getValue()) {
-                return false;
+    /**
+     * The step as the storehouse can pay for it today, or null when it cannot pay for a single run. Each ingredient
+     * slot takes whichever of its items the storehouse holds on top of what other jobs are counted on having, and the
+     * runs are cut to what that stock covers. The planner may have filled a slot with an item it meant to smelt --
+     * charcoal for a torch while one coal sits on the shelf -- and the village does not smelt, so the slot is chosen
+     * again here from real stock. A step whose inputs are an earlier step's output comes back null until that step
+     * has run.
+     */
+    static @Nullable CraftStep affordable(StorehouseBlockEntity storehouse, Map<Item, Integer> reserved, CraftStep step) {
+        List<Ingredient> slots = step.recipe().value().getIngredients().stream().filter(slot -> !slot.isEmpty()).toList();
+        int perRunOutput = Math.max(1, step.outputCount() / Math.max(1, step.times()));
+        for (int runs = step.times(); runs >= 1; runs--) {
+            Map<Item, Integer> inputs = pay(storehouse, reserved, slots, runs);
+            if (inputs != null) {
+                return runs == step.times() && inputs.equals(step.inputs()) ? step
+                        : new CraftStep(step.kind(), step.recipe(), inputs, step.output(), perRunOutput * runs, runs);
             }
         }
-        return true;
+        return null;
+    }
+
+    /**
+     * One item per slot, {@code runs} of it, all from spare storehouse stock, or null when some slot cannot be paid.
+     * A slot prefers the item with the most spare stock, the lowest id on a tie, so the same stock always pays the same
+     * way; slots sharing an item draw on the same count.
+     */
+    private static @Nullable Map<Item, Integer> pay(StorehouseBlockEntity storehouse, Map<Item, Integer> reserved,
+                                                    List<Ingredient> slots, int runs) {
+        Map<Item, Integer> inputs = new LinkedHashMap<>();
+        for (Ingredient slot : slots) {
+            Item best = null;
+            long bestSpare = 0;
+            for (ItemStack option : slot.getItems()) {
+                Item item = option.getItem();
+                long spare = storehouse.count(item) - reserved.getOrDefault(item, 0) - inputs.getOrDefault(item, 0);
+                if (spare < runs) {
+                    continue;
+                }
+                if (best == null || spare > bestSpare
+                        || (spare == bestSpare && BuiltInRegistries.ITEM.getKey(item).toString().compareTo(BuiltInRegistries.ITEM.getKey(best).toString()) < 0)) {
+                    best = item;
+                    bestSpare = spare;
+                }
+            }
+            if (best == null) {
+                return null;
+            }
+            inputs.merge(best, runs, Integer::sum);
+        }
+        return inputs;
     }
 
     /** Storehouse, table, storehouse: withdraw the batch's inputs, craft them, and store everything brought back. */

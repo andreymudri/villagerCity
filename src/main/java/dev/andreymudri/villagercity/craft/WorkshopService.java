@@ -2,18 +2,25 @@ package dev.andreymudri.villagercity.craft;
 
 import dev.andreymudri.villagercity.citizen.WorldPermissions;
 import dev.andreymudri.villagercity.citizen.task.MoveTo;
+import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.function.Consumer;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.tags.ItemTags;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Mob;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -25,12 +32,19 @@ import net.neoforged.neoforge.common.util.BlockSnapshot;
  * Keeps the artisan's workshop, a crafting table, in place for the village: it stands within
  * {@link #SEARCH_RADIUS} blocks of the storehouse so one plan can walk store, workshop and store again. A block that
  * goes missing is forgotten and placed again at the first free spot, which may differ from the old one.
+ * <p>
+ * Every table is paid for out of the storehouse: one log, or four planks when no log is stocked, which is what a
+ * player would spend to craft it. A broken crafting table drops itself, so a table the village set for free would be
+ * a free table for whoever broke it, every village tick, for ever. Paid for, breaking one only turns village stock
+ * into a table, and a village with nothing to pay with places none.
  */
 public final class WorkshopService {
     /** How far from the storehouse, horizontally, a workshop block may stand. */
     public static final int SEARCH_RADIUS = 3;
     /** How far above or below the storehouse a workshop block may stand. */
     public static final int VERTICAL_REACH = 1;
+    /** Planks a crafting table costs when the storehouse holds no log. */
+    public static final int PLANKS_PER_TABLE = 4;
 
     private WorkshopService() {
     }
@@ -50,7 +64,32 @@ public final class WorkshopService {
         if (storehouse == null || !level.isLoaded(storehouse) || !WorldPermissions.mayGrief(level, null)) {
             return;
         }
-        ensure(level, village, storehouse, Blocks.CRAFTING_TABLE, village.craftingTablePos(), village::setCraftingTablePos);
+        if (!(level.getBlockEntity(storehouse) instanceof StorehouseBlockEntity stock)) {
+            return;
+        }
+        ensure(level, village, storehouse, stock, Blocks.CRAFTING_TABLE, village.craftingTablePos(), village::setCraftingTablePos);
+    }
+
+    /**
+     * What the storehouse pays for one table: a single log, or {@link #PLANKS_PER_TABLE} planks of one kind, out of
+     * the stock no other job is counted on having -- the builder's logs and planks are never spent on a table. Logs
+     * come first because the lumberjack keeps them coming while planks are what the builder spends. Within each, the
+     * lowest item id, so the same stock always pays the same way.
+     */
+    static Optional<Map.Entry<Item, Integer>> price(StorehouseBlockEntity stock, Map<Item, Integer> reserved) {
+        Comparator<Item> byId = Comparator.comparing(item -> BuiltInRegistries.ITEM.getKey(item).toString());
+        Map<Item, Long> spare = new LinkedHashMap<>();
+        stock.counts().forEach((item, count) -> spare.put(item, count - reserved.getOrDefault(item, 0)));
+        Optional<Item> log = spare.entrySet().stream()
+                .filter(entry -> entry.getValue() >= 1 && entry.getKey().builtInRegistryHolder().is(ItemTags.LOGS))
+                .map(Map.Entry::getKey).min(byId);
+        if (log.isPresent()) {
+            return Optional.of(Map.entry(log.get(), 1));
+        }
+        return spare.entrySet().stream()
+                .filter(entry -> entry.getValue() >= PLANKS_PER_TABLE && entry.getKey().builtInRegistryHolder().is(ItemTags.PLANKS))
+                .map(Map.Entry::getKey).min(byId)
+                .map(planks -> Map.entry(planks, PLANKS_PER_TABLE));
     }
 
     /**
@@ -58,13 +97,17 @@ public final class WorkshopService {
      * spot {@link #spots} offers. Clearing first matters: the old cell is dropped from {@code occupiedFootprints} and
      * can be reused right away.
      */
-    private static void ensure(ServerLevel level, VillageData village, BlockPos storehouse, Block block,
-                               @Nullable BlockPos current, Consumer<BlockPos> save) {
+    private static void ensure(ServerLevel level, VillageData village, BlockPos storehouse, StorehouseBlockEntity stock,
+                               Block block, @Nullable BlockPos current, Consumer<BlockPos> save) {
         if (current != null) {
             if (!level.isLoaded(current) || level.getBlockState(current).is(block)) {
                 return;
             }
             save.accept(null);
+        }
+        Optional<Map.Entry<Item, Integer>> price = price(stock, VillageDemand.of(level, village, stock).reserved());
+        if (price.isEmpty()) {
+            return;
         }
         List<Footprint> occupied = village.occupiedFootprints();
         for (BlockPos spot : spots(storehouse)) {
@@ -77,6 +120,7 @@ public final class WorkshopService {
                 snapshot.restore(Block.UPDATE_ALL);
                 return;
             }
+            stock.extractForCitizen(price.get().getKey(), price.get().getValue());
             save.accept(spot);
             return;
         }

@@ -89,6 +89,28 @@ public final class ArtisanTests {
         village.addPlot(new Plot(UUID.randomUUID(), blueprint.id().toString(), origin, blueprint.size(), UUID.randomUUID()));
     }
 
+    /**
+     * As {@link #plotShortOf}, but only the FIRST placement of {@code one} is left out, so the plot is short of exactly
+     * one of it on top of every placement of {@code all}.
+     */
+    private static void plotShortOfOne(GameTestHelper helper, VillageData village, Blueprint blueprint, Block one, Block... all) {
+        ServerLevel level = helper.getLevel();
+        BlockPos origin = helper.absolutePos(PLOT);
+        List<Block> skipped = List.of(all);
+        boolean oneSkipped = false;
+        for (BlueprintPlacement placement : blueprint.placements()) {
+            if (skipped.stream().anyMatch(block -> placement.state().is(block))) {
+                continue;
+            }
+            if (!oneSkipped && placement.state().is(one)) {
+                oneSkipped = true;
+                continue;
+            }
+            level.setBlock(origin.offset(placement.offset()), placement.state(), Block.UPDATE_CLIENTS);
+        }
+        village.addPlot(new Plot(UUID.randomUUID(), blueprint.id().toString(), origin, blueprint.size(), UUID.randomUUID()));
+    }
+
     /** Puts a stack straight into the furnace at this position, the way a player leaves one behind. */
     private static void seedFurnace(GameTestHelper helper, BlockPos pos, int slot, ItemStack stack) {
         if (!(helper.getLevel().getBlockEntity(pos) instanceof AbstractFurnaceBlockEntity furnace)) {
@@ -136,13 +158,14 @@ public final class ArtisanTests {
     public static void placesAWorkshopByTheStorehouse(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
-        BuilderTests.stockedStorehouse(helper, village, Map.of());
+        StorehouseBlockEntity stock = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_LOG, 2));
         BlockPos storehouse = village.storehousePos();
 
         WorkshopService.ensureWorkshop(helper.getLevel(), village);
 
         BlockPos table = village.craftingTablePos();
         helper.assertTrue(table != null, "workshop not placed");
+        helper.assertTrue(stock.count(Items.OAK_LOG) == 1, "the table cost " + (2 - stock.count(Items.OAK_LOG)) + " logs, not 1");
         helper.assertBlockPresent(Blocks.CRAFTING_TABLE, relative(helper, table));
         int horizontal = Math.max(Math.abs(table.getX() - storehouse.getX()), Math.abs(table.getZ() - storehouse.getZ()));
         helper.assertTrue(horizontal <= WorkshopService.SEARCH_RADIUS && horizontal > 0,
@@ -159,6 +182,7 @@ public final class ArtisanTests {
         helper.assertTrue(replaced != null, "the broken crafting table was never replaced");
         helper.assertBlockPresent(Blocks.CRAFTING_TABLE, relative(helper, replaced));
         helper.assertTrue(table.equals(replaced), "the replacement table went to " + replaced + " instead of the freed cell " + table);
+        helper.assertTrue(stock.count(Items.OAK_LOG) == 0, "the replacement table was not paid for: " + stock.count(Items.OAK_LOG) + " logs left");
 
         VillageTestSupport.remove(helper, village);
         helper.succeed();
@@ -293,12 +317,17 @@ public final class ArtisanTests {
                 Map.of(Items.SAND, 16, Items.COAL, 8, Items.OAK_LOG, 10));
         Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
         village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
-        plotShortOf(helper, village, blueprint, Blocks.GLASS, Blocks.OAK_DOOR);
+        // One glass and the door, so the orders tie at one each and glass sorts first by id: the unbuildable step is
+        // planned AHEAD of the door's, and only an artisan that skips past it ever reaches the door.
+        plotShortOfOne(helper, village, blueprint, Blocks.GLASS, Blocks.OAK_DOOR);
         WorkshopService.ensureWorkshop(helper.getLevel(), village);
         ArtisanJob job = artisan(helper, village, 22, 22);
 
         helper.succeedWhen(() -> {
             String waiting = job.waitingFor();
+            List<String> orders = village.artisanOrders();
+            helper.assertTrue(!orders.isEmpty() && orders.get(0).startsWith("glass "),
+                    "the glass order is not first, so this test no longer puts the smelting step ahead: " + orders);
             helper.assertTrue(storehouse.count(Items.OAK_DOOR) >= 1, "the unbuildable glass order froze the door"
                     + " behind it: waiting for " + waiting + ", orders " + village.artisanOrders());
             // Checked before the message, so that a village which tries to run the smelting step says so in its own
@@ -383,6 +412,81 @@ public final class ArtisanTests {
     }
 
     /**
+     * A broken crafting table drops itself. The village pays for each one it sets -- a log, or four planks without
+     * one -- so breaking it turns village stock into a table instead of making one from nothing, and an empty
+     * storehouse gets no table at all.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_table_price")
+    public static void aBrokenTableIsNotAFreeTable(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity stock = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_LOG, 1, Items.OAK_PLANKS, 7));
+
+        int tables = 0;
+        for (int round = 0; round < 5; round++) {
+            WorkshopService.ensureWorkshop(helper.getLevel(), village);
+            BlockPos table = village.craftingTablePos();
+            if (table == null) {
+                break;
+            }
+            tables++;
+            helper.getLevel().destroyBlock(table, true);
+        }
+        long logs = stock.count(Items.OAK_LOG);
+        long planks = stock.count(Items.OAK_PLANKS);
+        VillageTestSupport.remove(helper, village);
+
+        // One log pays for the first table, four of the seven planks for the second; three planks buy nothing.
+        helper.assertTrue(tables == 2, tables + " tables set from one log and seven planks, not 2");
+        helper.assertTrue(logs == 0 && planks == 3, "paid the wrong way: " + logs + " logs and " + planks + " planks left");
+        helper.succeed();
+    }
+
+    /** Planks the builder is counted on having never pay for a table: the village waits for spare stock instead. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_table_reserved")
+    public static void aTableIsNeverPaidForWithTheBuildersPlanks(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity stock = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_PLANKS, 8));
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, Blocks.OAK_PLANKS);
+
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        BlockPos table = village.craftingTablePos();
+        long planks = stock.count(Items.OAK_PLANKS);
+        VillageTestSupport.remove(helper, village);
+
+        helper.assertTrue(table == null, "a table was paid for with planks the builder is waiting on, at " + table);
+        helper.assertTrue(planks == 8, "the builder's planks went from 8 to " + planks);
+        helper.succeed();
+    }
+
+    /**
+     * A lamplighter's sixteen torches and the house's one are a single order. With too little coal for the whole order
+     * the artisan still makes the torches the coal it has will make, rather than skipping the step and leaving the
+     * builder waiting on a torch the storehouse could have paid for.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_torch_with_little_coal", timeoutTicks = TRIP_TIMEOUT)
+    public static void littleCoalStillMakesTheHousesTorch(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_LOG, 20, Items.COAL, 1));
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        village.setCitizen(UUID.randomUUID(), JobType.BUILDER);
+        village.setCitizen(UUID.randomUUID(), JobType.LAMPLIGHTER);
+        plotShortOf(helper, village, blueprint, Blocks.WALL_TORCH);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        helper.succeedWhen(() -> {
+            helper.assertTrue(storehouse.count(Items.TORCH) >= 1, "one coal made no torch: waiting for "
+                    + job.waitingFor() + ", orders " + village.artisanOrders());
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /**
      * A world saved when the village still recorded a furnace position has that key in its works tag, and must load
      * anyway -- with the key ignored rather than carried forward. A record field the village never sets again is dead
      * state, and dead state is how a deleted feature comes back.
@@ -436,7 +540,8 @@ public final class ArtisanTests {
     public static void respectsMobGriefingForTheWorkshop(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
-        BuilderTests.stockedStorehouse(helper, village, Map.of());
+        // Stocked, so it is the game rule and not an empty storehouse that keeps the table out.
+        StorehouseBlockEntity stock = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_LOG, 1));
         GameRules.BooleanValue rule = helper.getLevel().getGameRules().getRule(GameRules.RULE_MOBGRIEFING);
         boolean previous = rule.get();
 
@@ -457,6 +562,7 @@ public final class ArtisanTests {
 
         helper.assertTrue(table == null, "recorded a workshop with mob griefing off: table " + table);
         helper.assertTrue(placed == 0, placed + " workshop blocks placed with mob griefing off");
+        helper.assertTrue(stock.count(Items.OAK_LOG) == 1, "charged for a table it did not place");
         helper.succeed();
     }
 
@@ -465,7 +571,7 @@ public final class ArtisanTests {
     public static void workshopRespectsCancelledPlaceEvent(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
-        BuilderTests.stockedStorehouse(helper, village, Map.of());
+        StorehouseBlockEntity stock = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_LOG, 1));
         BlockPos table;
         cancelAllPlacements = true;
         try {
@@ -476,6 +582,7 @@ public final class ArtisanTests {
             VillageTestSupport.remove(helper, village);
         }
         helper.assertTrue(table == null, "workshop recorded although placement was cancelled: table " + table);
+        helper.assertTrue(stock.count(Items.OAK_LOG) == 1, "charged for a table a protection mod refused");
         for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
             for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
                 for (int y = 1; y <= 3; y++) {
@@ -492,7 +599,7 @@ public final class ArtisanTests {
     public static void theWorkshopStaysOffLaidPaths(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
-        BuilderTests.stockedStorehouse(helper, village, Map.of());
+        BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_LOG, 1));
         BlockPos storehouse = village.storehousePos();
         // Every cell the search would otherwise take first is a laid path, so only the outermost ring is left.
         for (int dx = -2; dx <= 2; dx++) {
@@ -517,7 +624,7 @@ public final class ArtisanTests {
     public static void neverPlacesTheWorkshopInsideAVillager(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
-        BuilderTests.stockedStorehouse(helper, village, Map.of());
+        BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_LOG, 1));
         BlockPos storehouse = village.storehousePos();
         // The first cell the fixed search order takes, proved by placesAWorkshopByTheStorehouse: stand in it.
         BlockPos taken = storehouse.offset(-1, 0, -1);
