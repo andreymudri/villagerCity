@@ -679,6 +679,20 @@ public final class UnevenPlotTests {
         helper.succeed();
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_storehouse_no_street")
+    public static void aStorehouseNeedsNoStreet(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = village(helper);
+        // A street far from the bell; the storehouse still goes beside the bell, as in a village with no streets.
+        wideStreet(helper, village, 30, 40, 40, 1);
+        BlockPos spot = PlotPlanner.find(helper.getLevel(), village, new Vec3i(1, 1, 1))
+                .orElseThrow(() -> new GameTestAssertException("no storehouse spot on flat ground"));
+        Footprint area = new Footprint(spot.getX(), spot.getZ(), spot.getX(), spot.getZ()).inflate(PlotRules.MARGIN);
+        helper.assertTrue(PlotPlanner.touchingStreets(village, area).isEmpty() && chebyshev(relative(helper, spot), BELL) <= PlotPlanner.STEP,
+                "the storehouse went beside the street at " + relative(helper, spot) + " instead of beside the bell");
+        helper.succeed();
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_storehouse_gap")
     public static void aStorehouseMayStandThreeColumnsFromAHouse(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
