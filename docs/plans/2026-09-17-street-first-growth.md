@@ -216,6 +216,10 @@ only for costing the paver more than it can move.
 - Modify: `src/main/java/dev/andreymudri/villagercity/citizen/TaskScheduler.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/CitizenRoster.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/TaskSchedulerTests.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/job/LamplighterJob.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/job/SitePrep.java`
+- Test: `src/main/java/dev/andreymudri/villagercity/gametest/LightingTests.java`
+- Test: `src/main/java/dev/andreymudri/villagercity/gametest/SitePrepTests.java`
 
 **Depends:** T4
 
@@ -246,3 +250,9 @@ only for costing the paver more than it can move.
 - [ ] **Step 5:** A door MoveTo opened must never stay open. Close it when the scheduler yields the citizen to vanilla
       (night, sleep, panic, trading, raid), and when the citizen leaves the level (death, discard, chunk unload). Tests
       cover the yield, the release/stop path and the removal.
+- [ ] **Step 6:** A lamplighter's torch must not wedge plot preparation. Today LamplighterJob keeps torches off plot
+      footprints but not their margin, and SitePrep treats any torch as a player's obstruction, so a torch in a plot's
+      margin makes the plot fail again and again while nothing grows. Keep torches off plot footprints inflated by
+      PlotRules.MARGIN. A torch lit before the plot was claimed must not wedge the village either: either the planner
+      does not claim a pad whose preparation it would refuse, or SitePrep clears torches the village itself placed.
+      A player's block stays an obstruction.
