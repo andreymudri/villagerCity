@@ -2,6 +2,7 @@ package dev.andreymudri.villagercity.gametest;
 
 import com.mojang.serialization.JsonOps;
 import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.command.VillageCommand;
 import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.ContributionCategory;
 import dev.andreymudri.villagercity.village.Footprint;
@@ -10,6 +11,8 @@ import dev.andreymudri.villagercity.village.VillageCodecs;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageDetector;
 import dev.andreymudri.villagercity.village.VillageRegistry;
+import dev.andreymudri.villagercity.village.VillageWorks;
+import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
 import java.util.List;
 import java.util.UUID;
 import net.minecraft.core.BlockPos;
@@ -126,6 +129,102 @@ public final class VillageRegistryTests {
         helper.assertTrue(village.pathQueue().equals(List.of(built)), "path queue " + village.pathQueue());
         helper.assertTrue(village.removeQueuedPath(built) && village.pathQueue().isEmpty(), "queued path not removed: " + village.pathQueue());
         helper.assertTrue(!village.removeQueuedPath(built), "removed a path that was not queued");
+        helper.succeed();
+    }
+
+    /** Three street cells, two in a run at hop 1 and one grown from its end at hop 2, eastward from the bell. */
+    private static VillageData villageWithThreeStreetCells(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        village.addStreetCell(helper.absolutePos(new BlockPos(26, 2, 24)), 1);
+        village.addStreetCell(helper.absolutePos(new BlockPos(27, 2, 24)), 1);
+        village.addStreetCell(helper.absolutePos(new BlockPos(28, 3, 24)), 2);
+        return village;
+    }
+
+    private static VillageData roundTrip(VillageData village) {
+        CompoundTag saved = (CompoundTag) VillageCodecs.VILLAGE.encodeStart(NbtOps.INSTANCE, village).getOrThrow();
+        return VillageCodecs.VILLAGE.parse(NbtOps.INSTANCE, saved).getOrThrow();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void streetCellsRoundTripWithTheirHops(GameTestHelper helper) {
+        VillageData village = villageWithThreeStreetCells(helper);
+        List<StreetCell> expected = List.of(
+                new StreetCell(helper.absolutePos(new BlockPos(26, 2, 24)), 1),
+                new StreetCell(helper.absolutePos(new BlockPos(27, 2, 24)), 1),
+                new StreetCell(helper.absolutePos(new BlockPos(28, 3, 24)), 2));
+        helper.assertTrue(village.streets().equals(expected), "street cells recorded wrong: " + village.streets());
+        VillageData copy = roundTrip(village);
+        helper.assertTrue(copy.streets().equals(expected), "street cells or hops lost on reload: " + copy.streets());
+        helper.assertTrue(expected.stream().allMatch(cell -> copy.pathCells().contains(cell.pos())),
+                "street cells are not path cells after reload: " + copy.pathCells());
+        helper.assertTrue(copy.deepestHops() == 2, "deepest hops after reload: " + copy.deepestHops());
+        helper.succeed();
+    }
+
+    /**
+     * Two runs grow east from the bell (hop 1, then hop 2 from its end) and one grows west (hop 1): the frontier is the
+     * last cell of the eastern hop-2 run and the last cell of the western run, and nothing else.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void streetEndsAreOnlyTheFrontier(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        for (int x = 25; x <= 27; x++) {
+            village.addStreetCell(helper.absolutePos(new BlockPos(x, 2, 24)), 1);
+        }
+        for (int x = 28; x <= 30; x++) {
+            village.addStreetCell(helper.absolutePos(new BlockPos(x, 2 + x - 27, 24)), 2);
+        }
+        for (int x = 23; x >= 21; x--) {
+            village.addStreetCell(helper.absolutePos(new BlockPos(x, 2, 24)), 1);
+        }
+        List<StreetCell> expected = List.of(
+                new StreetCell(helper.absolutePos(new BlockPos(30, 5, 24)), 2),
+                new StreetCell(helper.absolutePos(new BlockPos(21, 2, 24)), 1));
+        helper.assertTrue(village.streetEnds().equals(expected), "street ends " + village.streetEnds() + ", expected " + expected);
+        helper.assertTrue(village.deepestHops() == 2, "deepest hops " + village.deepestHops());
+        helper.assertTrue(roundTrip(village).streetEnds().equals(expected), "street ends changed on reload");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void aSaveWithoutStreetsLoadsWithAnEmptyGraph(GameTestHelper helper) {
+        VillageData village = villageWithThreeStreetCells(helper);
+        village.recordOpenedDoor(helper.absolutePos(new BlockPos(5, 2, 5)));
+        CompoundTag saved = (CompoundTag) VillageCodecs.VILLAGE.encodeStart(NbtOps.INSTANCE, village).getOrThrow();
+        // Exactly what a save from before the street graph holds: no streets in the works, no opened doors.
+        saved.getCompound("works").remove("streets");
+        saved.remove("opened_doors");
+        helper.assertTrue(saved.getCompound("works").contains("path_cells"), "the old save lost its path cells: " + saved);
+
+        VillageData old = VillageCodecs.VILLAGE.parse(NbtOps.INSTANCE, saved).getOrThrow();
+        helper.assertTrue(old.streets().isEmpty() && old.streetEnds().isEmpty() && old.deepestHops() == 0,
+                "an old save loaded with a street graph: " + old.streets());
+        helper.assertTrue(old.openedDoors().isEmpty(), "an old save loaded with opened doors: " + old.openedDoors());
+        helper.assertTrue(old.pathCells().size() == 3, "an old save lost its path cells: " + old.pathCells());
+        VillageWorks works = VillageWorks.CODEC.parse(NbtOps.INSTANCE, new CompoundTag()).getOrThrow();
+        helper.assertTrue(works.streets().isEmpty(), "an empty works tag loaded with streets: " + works);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void aRecordedOpenedDoorSurvivesAReload(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        BlockPos door = helper.absolutePos(new BlockPos(5, 2, 5));
+        village.recordOpenedDoor(door);
+        VillageData copy = roundTrip(village);
+        helper.assertTrue(copy.openedDoors().equals(List.of(door)), "opened door lost on reload: " + copy.openedDoors());
+        helper.assertTrue(copy.clearOpenedDoor(door) && copy.openedDoors().isEmpty(), "opened door not cleared: " + copy.openedDoors());
+        helper.assertTrue(!copy.clearOpenedDoor(door), "cleared a door that was not recorded");
+        helper.assertTrue(roundTrip(copy).openedDoors().isEmpty(), "a cleared door came back on reload");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void theVillageCommandCountsTheStreets(GameTestHelper helper) {
+        VillageData village = villageWithThreeStreetCells(helper);
+        String text = String.join("\n", VillageCommand.describe(helper.getLevel(), village));
+        helper.assertTrue(text.contains("streets: 3 cells, 1 ends, deepest 2 hops"), "missing streets:\n" + text);
         helper.succeed();
     }
 

@@ -50,9 +50,11 @@ public final class VillageCodecs {
             BlockPos.CODEC.listOf().optionalFieldOf("felling", List.of()).forGetter(VillageData::felling),
             BlockPos.CODEC.listOf().optionalFieldOf("failed_plots", List.of()).forGetter(VillageData::failedPlots),
             VillageWorks.CODEC.optionalFieldOf("works", VillageWorks.EMPTY).forGetter(VillageData::works),
+            BlockPos.CODEC.listOf().optionalFieldOf("opened_doors", List.of()).forGetter(VillageData::openedDoors),
             Codec.BOOL.optionalFieldOf("managed", true).forGetter(VillageData::managed)
-    ).apply(i, (id, center, radius, age, storehouse, houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, works, managed) ->
-            new VillageData(id, center, radius, age, storehouse.orElse(null), houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, works, managed)));
+    ).apply(i, (id, center, radius, age, storehouse, houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, works, openedDoors, managed) ->
+            new VillageData(id, center, radius, age, storehouse.orElse(null), houses, plots, ledger, citizens, storehouseDebt, felling, failedPlots, works,
+                    openedDoors, managed)));
 
     private VillageCodecs() {
     }

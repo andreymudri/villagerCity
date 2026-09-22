@@ -182,6 +182,8 @@ public final class VillageCommand {
             lines.add(plotText(level, plot));
         }
         lines.add("paths: " + village.pathCells().size() + " cells laid, " + village.pathQueue().size() + " queued");
+        lines.add("streets: " + village.streets().size() + " cells, " + village.streetEnds().size() + " ends, deepest "
+                + village.deepestHops() + " hops");
         lines.add("workshop: table " + posText(village.craftingTablePos()));
         lines.add("dark spots: " + village.darkSpotCount());
         if (!village.artisanOrders().isEmpty()) {
