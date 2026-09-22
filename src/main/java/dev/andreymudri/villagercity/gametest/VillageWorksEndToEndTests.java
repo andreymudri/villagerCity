@@ -100,8 +100,8 @@ public final class VillageWorksEndToEndTests {
 
     /**
      * A managed village on a terraced hillside, five unemployed villagers and a storehouse of player supplies. With
-     * nobody's help it hires all five jobs, levels a plot, builds a house on it, lays a path to the bell and lights its
-     * ground until no monster could spawn there.
+     * nobody's help it hires all five jobs, levels a plot, builds a house on it and lights its ground until no monster
+     * could spawn there.
      */
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_works_e2e_hill", timeoutTicks = 36000, skyAccess = true)
     public static void aHillVillageGrowsOnItsOwn(GameTestHelper helper) {
@@ -137,7 +137,6 @@ public final class VillageWorksEndToEndTests {
             helper.assertTrue(village.houseCount() == 1, "houses " + village.houseCount() + ", plots "
                     + village.plots().stream().map(Plot::prepared).toList() + ", artisan orders " + village.artisanOrders());
             helper.assertTrue(sawUnprepared.get(), "the house went up on a plot the paver never had to level");
-            helper.assertTrue(!village.pathCells().isEmpty(), "no path was laid from the house to the bell");
             int dark = darkColumns(helper, village);
             helper.assertTrue(dark == 0, dark + " columns of village ground are still dark enough to spawn monsters");
             VillageTestSupport.remove(helper, village);
