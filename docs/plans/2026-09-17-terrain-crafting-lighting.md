@@ -399,6 +399,7 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
 - Create: `src/main/java/dev/andreymudri/villagercity/gametest/ArtisanTests.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/command/VillageCommand.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/gametest/VillageRegistryTests.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/gametest/VillageCommandTests.java`
 
 **Depends:** T1, T6
 
@@ -451,7 +452,7 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
   - **The `furnace` field is deleted, not just left unset** (user decision, 2026-09-22). Remove it from the
     `VillageWorks` record and its codec, `furnacePos`/`setFurnacePos` and the `occupiedFootprints` entry from
     `VillageData`, the furnace from `VillageCommand`'s workshop line, and the furnace round-trip assertions from
-    `VillageRegistryTests`.
+    `VillageRegistryTests`, and the furnace from the workshop line `VillageCommandTests` expects.
   - **The artisan crafts, and only crafts.** A plan whose steps include smelting is not buildable: the artisan skips
     it and reports what a player must bring.
   - **The report names the item the village actually needs, not its raw material.** The village cannot turn sand into
