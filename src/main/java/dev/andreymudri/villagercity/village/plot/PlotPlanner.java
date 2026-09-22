@@ -6,6 +6,8 @@ import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -55,49 +57,62 @@ public final class PlotPlanner {
     public record Site(BlockPos origin, int earthwork) {
     }
 
-    /** Returns the origin (minimum corner, at the first free y above ground) of a plot needing no earthwork ({@link #findSite} without a paver). */
+    /**
+     * Returns the origin (minimum corner, at the first free y above ground) of a spot for a building that is not a house,
+     * such as the storehouse: natural ground with no fluid and no laid path, clear of whatever the village has built,
+     * needing no earthwork, tried in {@link #candidates} order. The house rules ({@link PlotRules#HOUSE_GAP}, the street a
+     * house must touch, the skipped pads) do not apply, so a village packed with houses along its streets can still
+     * place one.
+     */
     public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size) {
         return find(level, village, size, pos -> true);
     }
 
-    /** As {@link #find(ServerLevel, VillageData, Vec3i)}, skipping buildable plots whose origin fails the predicate. */
+    /** As {@link #find(ServerLevel, VillageData, Vec3i)}, skipping buildable spots whose origin fails the predicate. */
     public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size, Predicate<BlockPos> originAllowed) {
-        return findSite(level, village, size, false, originAllowed).map(Site::origin);
+        return search(level, village, size, false, false, originAllowed).map(Site::origin);
     }
 
     /**
-     * A buildable house pad, or empty. Every pad must lie within the search reach, keep {@link PlotRules#MARGIN} off
-     * whatever the village has built, keep {@link PlotRules#HOUSE_GAP} open columns off every house and plot, and have a
-     * footprint plus margin of natural ground with no fluid and no laid path. Its floor must need earthwork the village
-     * can do ({@link PlotRules#earthworkAllowed}): with {@code allowEarthwork} (a paver) up to the paver's budget, without
-     * it none at all, which still allows ground the floor spans ({@link Earthwork#needsNone}).
+     * A buildable house pad, or empty. Every pad must keep {@link PlotRules#MARGIN} off whatever the village has built,
+     * keep {@link PlotRules#HOUSE_GAP} open columns off every house and plot, and have a footprint plus margin of natural
+     * ground with no fluid and no laid path. Its floor must need earthwork the village can do
+     * ({@link PlotRules#earthworkAllowed}): with {@code allowEarthwork} (a paver) up to the paver's budget, without it
+     * none at all, which still allows ground the floor spans ({@link Earthwork#needsNone}).
      * <p>
-     * A village with street cells only builds beside its streets: a pad must touch one ({@link #touchingStreets}), its
-     * floor is that street cell's y, one pad in {@link PlotRules#SKIP_ONE_IN} is left empty ({@link PlotRules#skipped}),
-     * and the pads are tried fewest hops first, then least earthwork, then nearest the bell. A village with no street
-     * cells tries the spots in {@link #candidates} order, as before it had streets, and takes the first ({@link #floor}).
+     * A village with street cells only builds beside its streets: the pads tried are every one, at any block, whose
+     * footprint plus margin touches a street ({@link #streetPads}, {@link #touchingStreets}), however far out the street
+     * runs; its floor is that street cell's y; one pad in {@link PlotRules#SKIP_ONE_IN} is left empty
+     * ({@link PlotRules#skipped}); and the pads are tried fewest hops first, then least earthwork, then nearest the bell.
+     * A village with no street cells tries the spots in {@link #candidates} order within {@link #searchReach}, as before
+     * it had streets, and takes the first ({@link #floor}).
      */
     public static Optional<Site> findSite(ServerLevel level, VillageData village, Vec3i size, boolean allowEarthwork, Predicate<BlockPos> originAllowed) {
+        return search(level, village, size, allowEarthwork, true, originAllowed);
+    }
+
+    private static Optional<Site> search(ServerLevel level, VillageData village, Vec3i size, boolean allowEarthwork, boolean house,
+            Predicate<BlockPos> originAllowed) {
         BlockPos center = village.center();
         int reach = searchReach(village);
         List<Footprint> occupied = village.occupiedFootprints();
-        List<Footprint> houses = houseFootprints(village);
+        List<Footprint> houses = house ? houseFootprints(village) : List.of();
         boolean anyPath = !village.pathCells().isEmpty();
-        boolean onStreets = !village.streets().isEmpty();
+        boolean onStreets = house && !village.streets().isEmpty();
         Long2ObjectMap<List<StreetCell>> streets = streetColumns(village);
         int[] groundYs = new int[(size.getX() + 2 * PlotRules.MARGIN) * (size.getZ() + 2 * PlotRules.MARGIN)];
         // Ground spanning more than twice the column step has no floor within the step of every column, and ground
         // spanning more than FLOOR_SPAN none that needs no earthwork.
         int maxRange = allowEarthwork ? 2 * Earthwork.MAX_COLUMN_STEP : Earthwork.FLOOR_SPAN;
         Long2ObjectMap<Column> cache = new Long2ObjectOpenHashMap<>();
-        List<int[]> order = onStreets ? PlotRules.spiral(reach, STEP) : candidates(village, reach);
+        List<int[]> order = onStreets ? streetPads(village, streets, size) : spiralPads(village, reach, size);
         List<Ranked> ranked = new ArrayList<>();
         for (int i = 0; i < order.size(); i++) {
-            int[] offset = order.get(i);
-            int minX = center.getX() + offset[0] - size.getX() / 2;
-            int minZ = center.getZ() + offset[1] - size.getZ() / 2;
+            int minX = order.get(i)[0];
+            int minZ = order.get(i)[1];
             Footprint footprint = new Footprint(minX, minZ, minX + size.getX() - 1, minZ + size.getZ() - 1);
-            if (!PlotRules.withinReach(footprint, center.getX(), center.getZ(), reach)
+            // Street pads are bounded by how far the streets run, not by the bell spiral's reach.
+            if ((!onStreets && !PlotRules.withinReach(footprint, center.getX(), center.getZ(), reach))
                     || PlotRules.overlapsAny(footprint, occupied)
                     || PlotRules.tooCloseToAHouse(footprint, houses)) {
                 continue;
@@ -148,7 +163,8 @@ public final class PlotPlanner {
                 continue;
             }
             if (!PlotRules.skipped(site.origin())) {
-                ranked.add(new Ranked(site, floor.street().hops(), Math.max(Math.abs(offset[0]), Math.abs(offset[1])), i));
+                int ring = Math.max(Math.abs(minX + size.getX() / 2 - center.getX()), Math.abs(minZ + size.getZ() / 2 - center.getZ()));
+                ranked.add(new Ranked(site, floor.street().hops(), ring, i));
             }
         }
         ranked.sort(Comparator.comparingInt(Ranked::hops)
@@ -161,6 +177,62 @@ public final class PlotPlanner {
             }
         }
         return Optional.empty();
+    }
+
+    /** The {@link #candidates} offsets as footprint minimum corners {x, z}. */
+    private static List<int[]> spiralPads(VillageData village, int reach, Vec3i size) {
+        BlockPos center = village.center();
+        List<int[]> pads = new ArrayList<>();
+        for (int[] offset : candidates(village, reach)) {
+            pads.add(new int[] {center.getX() + offset[0] - size.getX() / 2, center.getZ() + offset[1] - size.getZ() / 2});
+        }
+        return pads;
+    }
+
+    /**
+     * Every footprint minimum corner {x, z}, at a step of one block, whose footprint plus margin lies right beside a
+     * street cell or beside a path cell next to one (a wide street's side cell), in the order the streets were laid.
+     * The pads come from the streets themselves, so a street on any row, however far from the bell, has pads along it.
+     */
+    private static List<int[]> streetPads(VillageData village, Long2ObjectMap<List<StreetCell>> streets, Vec3i size) {
+        List<long[]> touchCells = new ArrayList<>();
+        LongSet seenCells = new LongOpenHashSet();
+        for (StreetCell cell : village.streets()) {
+            if (seenCells.add(BlockPos.asLong(cell.pos().getX(), 0, cell.pos().getZ()))) {
+                touchCells.add(new long[] {cell.pos().getX(), cell.pos().getZ()});
+            }
+        }
+        for (BlockPos path : village.pathCells()) {
+            if (seenCells.contains(BlockPos.asLong(path.getX(), 0, path.getZ()))) {
+                continue;
+            }
+            boolean besideStreet = false;
+            for (int dx = -1; dx <= 1 && !besideStreet; dx++) {
+                for (int dz = -1; dz <= 1 && !besideStreet; dz++) {
+                    besideStreet = streets.containsKey(BlockPos.asLong(path.getX() + dx, 0, path.getZ() + dz));
+                }
+            }
+            if (besideStreet && seenCells.add(BlockPos.asLong(path.getX(), 0, path.getZ()))) {
+                touchCells.add(new long[] {path.getX(), path.getZ()});
+            }
+        }
+        List<int[]> pads = new ArrayList<>();
+        LongSet seenPads = new LongOpenHashSet();
+        for (long[] cell : touchCells) {
+            int x = (int) cell[0];
+            int z = (int) cell[1];
+            // The footprint grown by margin plus one contains the cell, and the footprint plus margin does not.
+            for (int minZ = z - size.getZ() - PlotRules.MARGIN; minZ <= z + PlotRules.MARGIN + 1; minZ++) {
+                for (int minX = x - size.getX() - PlotRules.MARGIN; minX <= x + PlotRules.MARGIN + 1; minX++) {
+                    boolean inArea = x >= minX - PlotRules.MARGIN && x <= minX + size.getX() - 1 + PlotRules.MARGIN
+                            && z >= minZ - PlotRules.MARGIN && z <= minZ + size.getZ() - 1 + PlotRules.MARGIN;
+                    if (!inArea && seenPads.add(BlockPos.asLong(minX, 0, minZ))) {
+                        pads.add(new int[] {minX, minZ});
+                    }
+                }
+            }
+        }
+        return pads;
     }
 
     /** A street pad that passed every rule, with the keys it is ordered by. */
@@ -211,9 +283,14 @@ public final class PlotPlanner {
         return chosen;
     }
 
-    /** The floor at {@code y}: no earthwork when the floor covers the ground as it lies, else the blocks to cut plus fill. */
+    /**
+     * The floor at {@code y}: the blocks to cut plus fill, or no earthwork when the floor covers the ground as it lies
+     * ({@link Earthwork#needsNone}). A paver levels a street pad fully, so there the dip the floor would span is charged
+     * too and the plot is not taken as already prepared.
+     */
     private static Floor at(int[] groundYs, int y, @Nullable StreetCell street, boolean allowEarthwork) {
-        int earthwork = Earthwork.needsNone(groundYs, y) ? 0 : Earthwork.volume(groundYs, y);
+        boolean spanned = (street == null || !allowEarthwork) && Earthwork.needsNone(groundYs, y);
+        int earthwork = spanned ? 0 : Earthwork.volume(groundYs, y);
         int step = Earthwork.maxColumnStep(groundYs, y);
         return new Floor(y, earthwork, step, street, PlotRules.earthworkAllowed(earthwork, step, allowEarthwork));
     }

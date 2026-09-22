@@ -40,7 +40,8 @@ public final class PlotDiagnostics {
 
         boolean ok = true;
         int distance = Math.max(Math.abs(center.getX() - bell.getX()), Math.abs(center.getZ() - bell.getZ()));
-        if (!PlotRules.withinReach(footprint, bell.getX(), bell.getZ(), reach)) {
+        // Beside a street, the pads are bounded by how far the streets run, not by the search reach.
+        if (village.streets().isEmpty() && !PlotRules.withinReach(footprint, bell.getX(), bell.getZ(), reach)) {
             lines.add("NO  too far from the bell: " + distance + " blocks away, the search reaches " + reach);
             ok = false;
         }

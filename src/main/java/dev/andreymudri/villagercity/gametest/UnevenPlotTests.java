@@ -124,7 +124,7 @@ public final class UnevenPlotTests {
         BlockPos house = new BlockPos(38, 1, 38);
         village.addHouse(new BuildingRecord("minecraft:home", helper.absolutePos(house), HOUSE));
         village.setRadius(4);
-        BlockPos origin = relative(helper, PlotPlanner.find(helper.getLevel(), village, HOUSE).orElseThrow(() -> new AssertionError("no plot found beside the house")));
+        BlockPos origin = relative(helper, PlotPlanner.findSite(helper.getLevel(), village, HOUSE, false, pos -> true).map(PlotPlanner.Site::origin).orElseThrow(() -> new AssertionError("no plot found beside the house")));
         int toHouse = chebyshev(origin, house);
         // As near the house as HOUSE_GAP lets a pad stand: the house's width plus the gap. The first spot a village with
         // nothing built takes lies twice as far from it.
@@ -509,8 +509,9 @@ public final class UnevenPlotTests {
         helper.assertTrue(reach.minZ() <= 38 && 38 <= reach.maxZ() && reach.minX() <= 34 && 14 <= reach.maxX(),
                 "the pad at " + origin + " does not touch the 1-hop street at z 38");
         helper.assertTrue(origin.getY() == 2, "the floor is y" + origin.getY() + ", not the street's y2");
-        // The ground lies one block below that floor everywhere, which the house's floor spans without earthwork.
-        helper.assertTrue(site.earthwork() == 0, "earthwork " + site.earthwork() + " for ground the floor spans");
+        // The ground lies one block below that floor everywhere. The paver fills it all rather than leave the house's
+        // floor over a one-block gap, so the pad is not taken as already prepared.
+        helper.assertTrue(site.earthwork() == 49, "earthwork " + site.earthwork() + ", expected 49 blocks of fill up to the street");
         helper.succeed();
     }
 
@@ -621,5 +622,107 @@ public final class UnevenPlotTests {
             }
         }
         helper.succeed();
+    }
+
+    /** Records a 3-wide street along z {@code row}, x {@code fromX}..{@code toX}: the centre in the graph, both sides as path cells. */
+    private static void wideStreet(GameTestHelper helper, VillageData village, int fromX, int toX, int row, int y) {
+        for (int x = fromX; x <= toX; x++) {
+            village.addStreetCell(helper.absolutePos(new BlockPos(x, y, row)), 1);
+            village.addPathCell(helper.absolutePos(new BlockPos(x, y, row - 1)));
+            village.addPathCell(helper.absolutePos(new BlockPos(x, y, row + 1)));
+        }
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_street_even_row")
+    public static void aStreetOnTheBellsOwnRowHasPadsAlongIt(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = village(helper);
+        // The first street starts at the bell, so its centre line lies on the bell's own row: an even offset of 0.
+        wideStreet(helper, village, 26, 40, BELL.getZ(), 1);
+        List<BlockPos> offered = new ArrayList<>();
+        PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> !offered.add(pos));
+        // Beside the street, not at its ends: the footprint plus margin stops right at a side cell, z 23 or z 25.
+        long beside = offered.stream().map(pos -> relative(helper, pos))
+                .filter(pos -> (pos.getZ() == 17 || pos.getZ() == 27) && pos.getX() >= 26 && pos.getX() + HOUSE.getX() - 1 <= 40)
+                .count();
+        helper.assertTrue(beside >= 8, "only " + beside + " of " + offered.size() + " pads lie beside a street on the bell's row");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_street_far")
+    public static void aStreetBeyondTheSearchReachStillHasPads(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // Radius 4: the bell spiral reaches 20 blocks, to x 24; the street runs from x 28 to 40.
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(4, 1, 24)), 4);
+        wideStreet(helper, village, 28, 40, 24, 1);
+        BlockPos origin = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true)
+                .map(site -> relative(helper, site.origin()))
+                .orElseThrow(() -> new GameTestAssertException("no pad beside a street beyond the search reach"));
+        helper.assertTrue(origin.getX() + HOUSE.getX() - 1 > 4 + PlotPlanner.searchReach(village), "planned " + origin + ", within the old reach");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_storehouse_stranded")
+    public static void aStorehouseStillFindsASpotInAPackedStreetVillage(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = village(helper);
+        wideStreet(helper, village, 26, 40, 24, 1);
+        // Houses 5 apart along both sides of the street, and every other spot beside it within the gap of one.
+        for (int x = 26; x <= 36; x += HOUSE.getX() + PlotRules.HOUSE_GAP) {
+            village.addHouse(new BuildingRecord("minecraft:home", helper.absolutePos(new BlockPos(x, 1, 17)), HOUSE));
+            village.addHouse(new BuildingRecord("minecraft:home", helper.absolutePos(new BlockPos(x, 1, 27)), HOUSE));
+        }
+        Vec3i storehouse = new Vec3i(1, 1, 1);
+        helper.assertTrue(PlotPlanner.findSite(helper.getLevel(), village, storehouse, false, pos -> true).isEmpty(),
+                "a house pad fits here, so the layout does not strand a search under the house rules");
+        helper.assertTrue(PlotPlanner.find(helper.getLevel(), village, storehouse).isPresent(), "the storehouse found nowhere to go");
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_storehouse_gap")
+    public static void aStorehouseMayStandThreeColumnsFromAHouse(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // Logs everywhere but the 3x3 around (10, 10), the only spot for a 1x1 storehouse.
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if (x < 9 || x > 11 || z < 9 || z > 11) {
+                    helper.setBlock(x, 1, z, Blocks.OAK_LOG);
+                }
+            }
+        }
+        VillageData village = village(helper);
+        // Columns 11, 12 and 13 lie open between the spot and the house.
+        village.addHouse(new BuildingRecord("minecraft:home", helper.absolutePos(new BlockPos(14, 1, 8)), HOUSE));
+        Optional<BlockPos> spot = PlotPlanner.find(helper.getLevel(), village, new Vec3i(1, 1, 1)).map(pos -> relative(helper, pos));
+        helper.assertTrue(spot.filter(new BlockPos(10, 1, 10)::equals).isPresent(), "the storehouse spot 3 columns from a house was refused: " + spot);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_street_unprepared", timeoutTicks = 1200)
+    public static void aPadBelowItsStreetIsClaimedUnprepared(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // A street raised a block above the ground, so every pad beside it lies one block below its floor.
+        for (int x = 14; x <= 34; x++) {
+            helper.setBlock(x, 1, 34, Blocks.DIRT);
+        }
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
+        for (int x = 14; x <= 34; x++) {
+            village.addStreetCell(helper.absolutePos(new BlockPos(x, 2, 34)), 1);
+        }
+        // A paver on the roster, with no villager behind it, so nothing prepares the plot during the test.
+        village.setCitizen(UUID.randomUUID(), JobType.PAVER);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        BuilderTests.stockedStorehouse(helper, village, blueprint, 1);
+        Villager villager = GameTestSupport.spawnVillager(helper, 22, 1, 30);
+        BuilderJob job = new BuilderJob();
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.plots().size() == 1, "no plot claimed; waiting for " + job.waitingFor());
+            Plot plot = village.plots().get(0);
+            BlockPos origin = relative(helper, plot.origin());
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(origin.getY() == 2, "the plot at " + origin + " is not at the street's y2");
+            helper.assertFalse(plot.prepared(), "the plot at " + origin + ", a block below its street, was claimed prepared");
+        });
     }
 }

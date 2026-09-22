@@ -57,7 +57,7 @@ public final class VillageCommandTests {
         helper.assertFalse(onBump.startsWith("This spot is buildable."), "a step was accepted:\n" + onBump);
         helper.assertTrue(onBump.contains("NO  earthwork") && onBump.contains("the budget is 0 with no paver"), "no earthwork reason given:\n" + onBump);
         // The planner must agree: it takes the flat spot and never the one the diagnosis rejected.
-        BlockPos planned = PlotPlanner.find(helper.getLevel(), village, blueprint.size()).orElseThrow();
+        BlockPos planned = PlotPlanner.findSite(helper.getLevel(), village, blueprint.size(), false, pos -> true).orElseThrow().origin();
         helper.assertTrue(Math.abs(planned.getX() - uneven.getX()) > 1 || Math.abs(planned.getZ() - uneven.getZ()) > 1,
                 "the planner took the spot the diagnosis rejected: " + planned);
         String onPlanned = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, planned.offset(blueprint.size().getX() / 2, 0, blueprint.size().getZ() / 2), blueprint.size()));
