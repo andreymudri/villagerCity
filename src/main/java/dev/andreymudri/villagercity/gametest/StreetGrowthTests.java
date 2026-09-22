@@ -89,6 +89,25 @@ public final class StreetGrowthTests {
         });
     }
 
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_street_growth_builder_waits", timeoutTicks = 800)
+    public static void aBuilderWithAPaverWaitsForAStreet(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
+        // A paver on the roster, with no villager behind it, so no street is ever laid.
+        village.setCitizen(UUID.randomUUID(), JobType.PAVER);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        BuilderTests.stockedStorehouse(helper, village, blueprint, 1);
+        Villager builder = enrollBuilder(helper, village, 22, 1, 28);
+        helper.runAfterDelay(600, () -> {
+            List<Plot> plots = village.plots();
+            String waiting = waitingFor(builder);
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(plots.isEmpty(), "the builder claimed a plot with no street to build on: " + plots);
+            helper.assertTrue("a street to build on".equals(waiting), "the builder is waiting for " + waiting);
+            helper.succeed();
+        });
+    }
+
     /** Runs with {@code skyAccess}: the rise climbs above the test area's 12-block height, into its barrier ceiling. */
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_street_growth_slope", timeoutTicks = 24000, skyAccess = true)
     public static void aSlopeIsCrossedInSeveralHopsAndNeverInOne(GameTestHelper helper) {
