@@ -204,11 +204,14 @@ only for costing the paver more than it can move.
 
 **Files:**
 - Modify: `README.md`
+- Modify: `src/main/java/dev/andreymudri/villagercity/job/StreetWork.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/job/PaverJob.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/VillageWorksEndToEndTests.java`
+- Test: `src/main/java/dev/andreymudri/villagercity/gametest/StreetGrowthTests.java`
 
 **Depends:** T4
 
-**Model:** mid
+**Model:** capable
 
 - [ ] **Step 1:** README: describe street-first growth, the numbers (streets 3 wide, run of 8, 6 hops, reach 64, earth
       budget 80, column step 6, houses at least 5 apart, one pad in eight skipped) and what `/villagercity village` now
@@ -218,3 +221,11 @@ only for costing the paver more than it can move.
       houses on them at the streets' own heights and at least 5 blocks apart, and lights
       the ground, with no wrong blocks and no village state left behind. It runs with `skyAccess = true`: under the
       barrier ceiling every column reads as lit.
+- [ ] **Step 3:** Two follow-ups from the phase-3 review. (a) A bell on a cliff top: T4 measures the first run's first
+      centre against that column's own ground, so a bell at a plateau's edge starts its first street, and its first
+      house, at the cliff foot, even when a street level with the bell could leave in another direction. Prefer a
+      bell-root direction whose first centre is within `MAX_STEP` of the ground under the bell, and fall back to the
+      free first step only when there is none. The bell-on-a-pillar test must still pass. Add a GameTest with a 6-block
+      plateau edge beside the bell that ends with the first street level with the bell. (b) Pin the paver's order in a
+      test: an unprepared plot and a street that can still grow exist together, and the paver prepares the plot first.
+      Swapping `prep.plan` and `streets.plan` in `PaverJob.plan` must fail it.
