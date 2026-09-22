@@ -178,6 +178,7 @@ only for costing the paver more than it can move.
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/StreetWork.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/BuilderJob.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageTicker.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/gametest/UnevenPlotTests.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/StreetGrowthTests.java`
 
 **Depends:** T2, T3
@@ -190,6 +191,11 @@ only for costing the paver more than it can move.
       "no plot" as a failure when the village has no streets yet) and reports `waitingFor = "a street to build on"`.
 - [ ] **Step 3:** The first street run of a village starts at the bell: `StreetWork` treats the bell's own cell as the
       root end at hop 0 when the graph is empty.
+- [ ] **Step 3b (amended 2026-09-22):** `UnevenPlotTests.aBuilderWithAPaverClaimsASlopedPlotUnprepared` expects a
+      builder with a paver on the roster to claim a sloped plot in a village with no streets, which Step 2 now forbids.
+      Give that test's village a street cell beside the terraces (`addStreetCell`), so the builder claims a
+      street-attached pad that still needs preparing. The test keeps checking what it was written for: the plot is
+      claimed unprepared.
 - [ ] **Step 4:** Tests in `StreetGrowthTests`: a fresh village with a paver and a builder lays a street and then builds
       a house on it; on a slope the village crosses a 20-block rise in several hops and never in one; a village whose
       graph cannot grow reports "room to grow"; a village with no paver still builds on flat ground with no streets.
