@@ -123,10 +123,10 @@ public final class StreetTests {
         VillageData village = streetVillage(helper, ROOT, 0);
         enrollPaver(helper, village, 1, new StreetWork());
         helper.succeedWhen(() -> {
-            // A second run started: the first one is over.
-            helper.assertFalse(withHops(village, 2).isEmpty(), "no second run yet");
             List<StreetCell> run = withHops(village, 1);
             helper.assertTrue(run.size() == 3, "the first run has " + run.size() + " cells instead of stopping before the 2-block step");
+            // A second run started: the first one is over.
+            helper.assertFalse(withHops(village, 2).isEmpty(), "no second run yet");
             helper.assertTrue(relative(helper, run.get(2).pos()).getX() == 7, "the first run ends at " + relative(helper, run.get(2).pos()).toShortString());
             VillageTestSupport.remove(helper, village);
         });
@@ -147,9 +147,10 @@ public final class StreetTests {
         BlockPos bell = village.center();
         enrollPaver(helper, village, 1, new StreetWork());
         helper.succeedWhen(() -> {
-            helper.assertFalse(withHops(village, 2).isEmpty(), "no second run yet");
             List<StreetCell> run = withHops(village, 1);
             helper.assertTrue(run.size() == 4, "the first run has " + run.size() + " cells instead of stopping at the reach limit");
+            // A second run started: the first one is over.
+            helper.assertFalse(withHops(village, 2).isEmpty(), "no second run yet");
             for (StreetCell cell : village.streets()) {
                 int reach = Math.max(Math.abs(cell.pos().getX() - bell.getX()), Math.abs(cell.pos().getZ() - bell.getZ()));
                 helper.assertTrue(reach <= StreetWork.REACH, "street cell " + relative(helper, cell.pos()).toShortString() + " is " + reach + " from the bell");
@@ -189,9 +190,10 @@ public final class StreetTests {
         Footprint footprint = house.footprint();
         enrollPaver(helper, village, 1, new StreetWork());
         helper.succeedWhen(() -> {
-            helper.assertFalse(withHops(village, 2).isEmpty(), "no second run yet");
             List<StreetCell> run = withHops(village, 1);
             helper.assertTrue(run.size() == 4, "the first run has " + run.size() + " cells instead of stopping where its side meets the house");
+            // A second run started: the first one is over.
+            helper.assertFalse(withHops(village, 2).isEmpty(), "no second run yet");
             for (BlockPos cell : village.pathCells()) {
                 helper.assertFalse(footprint.contains(cell.getX(), cell.getZ()), "path cell " + relative(helper, cell).toShortString() + " lies inside the house");
             }
@@ -212,9 +214,10 @@ public final class StreetTests {
         VillageData village = streetVillage(helper, root, 0);
         enrollPaver(helper, village, 4, new StreetWork());
         helper.succeedWhen(() -> {
-            helper.assertFalse(withHops(village, 2).isEmpty(), "no second run yet");
             List<StreetCell> run = withHops(village, 1);
             helper.assertTrue(run.size() == 3, "the first run has " + run.size() + " cells instead of stopping before the pit");
+            // A second run started: the first one is over.
+            helper.assertFalse(withHops(village, 2).isEmpty(), "no second run yet");
             helper.assertTrue(helper.getBlockState(new BlockPos(8, 3, 25)).isAir(), "the pit beside the street was filled");
             VillageTestSupport.remove(helper, village);
         });
