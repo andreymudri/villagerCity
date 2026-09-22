@@ -1,14 +1,18 @@
 package dev.andreymudri.villagercity.gametest;
 
 import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.citizen.CitizenAttachments;
 import dev.andreymudri.villagercity.citizen.Inventories;
 import dev.andreymudri.villagercity.citizen.JobType;
 import dev.andreymudri.villagercity.citizen.Task;
+import dev.andreymudri.villagercity.citizen.TaskSequence;
 import dev.andreymudri.villagercity.citizen.task.MoveTo;
 import dev.andreymudri.villagercity.citizen.task.PickUpItems;
 import dev.andreymudri.villagercity.village.VillageData;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.tags.ItemTags;
@@ -16,6 +20,11 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -77,6 +86,185 @@ public final class MovementTests {
             helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results);
             helper.assertTrue(Inventories.count(villager.getInventory(), s -> s.is(Items.OAK_LOG)) == 3, "logs carried " + Inventories.count(villager.getInventory(), s -> s.is(Items.OAK_LOG)));
             VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** The door of {@link #shutIn}'s box, in its north wall. */
+    private static final BlockPos DOOR = new BlockPos(10, 1, 8);
+
+    /**
+     * A roofed 5 by 5 cobblestone box from (8, 1, 8) to (12, 3, 12), shut with a closed {@code door} in the middle of
+     * its north wall at {@link #DOOR}, and a villager standing inside it.
+     */
+    private static Villager shutIn(GameTestHelper helper, Block door) {
+        for (int x = 8; x <= 12; x++) {
+            for (int z = 8; z <= 12; z++) {
+                helper.setBlock(x, 4, z, Blocks.COBBLESTONE);
+                if (x == 8 || x == 12 || z == 8 || z == 12) {
+                    for (int y = 1; y <= 3; y++) {
+                        helper.setBlock(x, y, z, Blocks.COBBLESTONE);
+                    }
+                }
+            }
+        }
+        BlockState closed = door.defaultBlockState().setValue(DoorBlock.FACING, Direction.NORTH).setValue(DoorBlock.OPEN, false);
+        helper.setBlock(DOOR, closed.setValue(DoorBlock.HALF, DoubleBlockHalf.LOWER));
+        helper.setBlock(DOOR.above(), closed.setValue(DoorBlock.HALF, DoubleBlockHalf.UPPER));
+        return GameTestSupport.spawnVillager(helper, 10, 1, 10);
+    }
+
+    private static boolean doorOpen(GameTestHelper helper) {
+        BlockState state = helper.getBlockState(DOOR);
+        return state.getBlock() instanceof DoorBlock && state.getValue(DoorBlock.OPEN);
+    }
+
+    /**
+     * A citizen shut in a house walks out through its closed wooden door, and the door is closed again behind it. The
+     * builder of a finished house used to stand at such a door for good: nothing opened it.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_wooden_door", timeoutTicks = 600)
+    public static void moveToLeavesThroughAClosedWoodenDoorAndClosesIt(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = shutIn(helper, Blocks.OAK_DOOR);
+        BlockPos target = helper.absolutePos(new BlockPos(10, 1, 3));
+        ScriptedJob job = new ScriptedJob(new MoveTo(target, 1.5));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results + ", villager at "
+                    + StreetTests.relative(helper, villager.blockPosition()).toShortString());
+            helper.assertFalse(doorOpen(helper), "the door was left open");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** An iron door is never opened: a citizen shut in behind one stays in, and its move fails. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_iron_door", timeoutTicks = 600)
+    public static void moveToNeverOpensAnIronDoor(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = shutIn(helper, Blocks.IRON_DOOR);
+        BlockPos target = helper.absolutePos(new BlockPos(10, 1, 3));
+        ScriptedJob job = new ScriptedJob(new MoveTo(target, 1.5));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        helper.onEachTick(() -> {
+            if (doorOpen(helper)) {
+                VillageTestSupport.remove(helper, village);
+                helper.fail("the iron door was opened");
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(job.results.equals(List.of(Task.Status.FAILED)), "results " + job.results);
+            BlockPos at = StreetTests.relative(helper, villager.blockPosition());
+            helper.assertTrue(at.getZ() > DOOR.getZ(), "the villager got out to " + at.toShortString());
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /**
+     * A shut-in villager walking out of its box through the oak door, with the job that runs the move. The move is the
+     * first step of a {@link TaskSequence}, as in the jobs that walk somewhere to work.
+     */
+    private record Walkout(VillageData village, Villager villager, ScriptedJob job) {
+    }
+
+    private static Walkout walkout(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = shutIn(helper, Blocks.OAK_DOOR);
+        ScriptedJob job = new ScriptedJob(TaskSequence.of(new MoveTo(helper.absolutePos(new BlockPos(10, 1, 3)), 1.5)));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        return new Walkout(village, villager, job);
+    }
+
+    /**
+     * Night falls the tick the door opens, so the citizen yields to vanilla mid-move: the door it opened is closed
+     * while it rests. When day comes back the move resumes, gets out through the door and leaves it closed. The
+     * villager's AI is off for the night, so vanilla neither walks it nor opens a door itself.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_door_night", timeoutTicks = 1200)
+    public static void aDoorOpenedAtDuskIsClosedForTheNightAndTheMoveResumesAtDawn(GameTestHelper helper) {
+        Walkout walkout = walkout(helper);
+        AtomicLong dusk = new AtomicLong(-1);
+        helper.onEachTick(() -> {
+            if (dusk.get() < 0 && doorOpen(helper)) {
+                helper.getLevel().setDayTime(13000);
+                // Vanilla's own night routine opens doors on its paths too; frozen, only the citizen's move can.
+                walkout.villager().setNoAi(true);
+                dusk.set(helper.getTick());
+            }
+            if (dusk.get() >= 0 && helper.getTick() == dusk.get() + 200) {
+                boolean open = doorOpen(helper);
+                helper.getLevel().setDayTime(GameTestSupport.DAY_TIME);
+                walkout.villager().setNoAi(false);
+                if (open) {
+                    VillageTestSupport.remove(helper, walkout.village());
+                    helper.fail("the door was still open 200 ticks into the night, the villager at "
+                            + StreetTests.relative(helper, walkout.villager().blockPosition()).toShortString());
+                }
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(dusk.get() >= 0 && helper.getTick() > dusk.get() + 200, "the night is not over yet");
+            helper.assertTrue(walkout.job().results.equals(List.of(Task.Status.SUCCESS)), "results " + walkout.job().results);
+            helper.assertFalse(doorOpen(helper), "the door was left open after the move resumed");
+            helper.getLevel().setDayTime(GameTestSupport.DAY_TIME);
+            VillageTestSupport.remove(helper, walkout.village());
+        });
+    }
+
+    /** The citizen is released (its job cleared) the tick the door opens: the task is stopped, and it closes the door. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_door_release", timeoutTicks = 400)
+    public static void aDoorOpenedByAReleasedCitizenIsClosed(GameTestHelper helper) {
+        Walkout walkout = walkout(helper);
+        AtomicLong released = new AtomicLong(-1);
+        helper.onEachTick(() -> {
+            if (released.get() < 0 && doorOpen(helper)) {
+                walkout.villager().getData(CitizenAttachments.CITIZEN).clear();
+                released.set(helper.getTick());
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(released.get() >= 0, "the door never opened");
+            helper.assertFalse(doorOpen(helper), "the door a released citizen opened is still open");
+            VillageTestSupport.remove(helper, walkout.village());
+        });
+    }
+
+    /** The villager is discarded the tick the door opens: the door it opened is closed. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_door_discard", timeoutTicks = 400)
+    public static void aDoorOpenedByADiscardedCitizenIsClosed(GameTestHelper helper) {
+        Walkout walkout = walkout(helper);
+        AtomicLong gone = new AtomicLong(-1);
+        helper.onEachTick(() -> {
+            if (gone.get() < 0 && doorOpen(helper)) {
+                walkout.villager().discard();
+                gone.set(helper.getTick());
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(gone.get() >= 0, "the door never opened");
+            helper.assertFalse(doorOpen(helper), "the door a discarded citizen opened is still open");
+            VillageTestSupport.remove(helper, walkout.village());
+        });
+    }
+
+    /** The villager is killed the tick the door opens: once it is removed, the door it opened is closed. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_door_killed", timeoutTicks = 400)
+    public static void aDoorOpenedByAKilledCitizenIsClosed(GameTestHelper helper) {
+        Walkout walkout = walkout(helper);
+        AtomicLong killed = new AtomicLong(-1);
+        helper.onEachTick(() -> {
+            if (killed.get() < 0 && doorOpen(helper)) {
+                walkout.villager().kill();
+                killed.set(helper.getTick());
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(killed.get() >= 0, "the door never opened");
+            helper.assertTrue(walkout.villager().isRemoved(), "the villager is not removed yet");
+            helper.assertFalse(doorOpen(helper), "the door a killed citizen opened is still open");
+            VillageTestSupport.remove(helper, walkout.village());
         });
     }
 }

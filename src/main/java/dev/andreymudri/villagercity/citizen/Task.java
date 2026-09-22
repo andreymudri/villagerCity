@@ -10,8 +10,9 @@ public interface Task {
     Status tick(TaskContext ctx);
 
     /**
-     * Called once when the task ends for any reason other than being paused.
-     * {@code ctx.village()} is null when the task is stopped because the citizen's village no longer exists.
+     * Called once when the task ends for any reason other than being paused, including the villager leaving the level
+     * (death, discard, chunk unload, dimension change). {@code ctx.village()} is null when the task is stopped because
+     * the citizen's village no longer exists or could not be looked up.
      */
     default void stop(TaskContext ctx) {
     }

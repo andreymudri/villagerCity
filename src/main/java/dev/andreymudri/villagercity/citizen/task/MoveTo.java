@@ -2,12 +2,21 @@ package dev.andreymudri.villagercity.citizen.task;
 
 import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
+import java.util.Iterator;
+import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.WeakHashMap;
 import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
 import net.minecraft.world.entity.npc.Villager;
+import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.pathfinder.Path;
 import net.minecraft.world.phys.Vec3;
 
@@ -17,12 +26,21 @@ import net.minecraft.world.phys.Vec3;
  * {@link #digOut} digs a staircase ({@link DigStep}) once it is stuck and its path does not reach the target, so a
  * citizen trapped in a cave still gets back to the village; it stays in that mode, digging one step after another,
  * until a path reaches the target again or {@link #MAX_DIG_STEPS} steps are dug.
+ *
+ * <p>The path may lead through a closed wooden door, since a villager's navigation plans through them, but vanilla's
+ * door behaviour only opens doors on the path in the brain's {@code PATH} memory, which this task never sets. So the
+ * task opens a closed wooden door itself once the citizen is within {@link #DOOR_REACH} of it on its path, and closes
+ * it again once the citizen is farther than that from it, when the task ends, and whenever the citizen yields to
+ * vanilla ({@link #closeDoorsOpenedBy}); a door met again on the path afterwards is opened again. It never opens any
+ * other door. A door whose chunk is not loaded is left as it is.
  */
 public final class MoveTo implements Task {
     public static final double SPEED = 0.6;
     public static final int STUCK_TICKS = 200;
     public static final int REPATH_TICKS = 20;
     public static final int MAX_DIG_STEPS = 64;
+    /** How close, from the citizen's feet to the door's centre, a door on the path is opened and kept open. */
+    public static final double DOOR_REACH = 2.0;
 
     private final BlockPos target;
     private final double reach;
@@ -35,6 +53,12 @@ public final class MoveTo implements Task {
     private int ticksRun;
     private int lastProgressTick;
     private int lastPathTick;
+    /** Lower halves of the wooden doors this task opened and has not closed yet. */
+    private final Set<BlockPos> openedDoors = new LinkedHashSet<>();
+    /** The moves with a door open, by villager; weak, so a villager that is gone takes its entry with it. */
+    private static final Map<Villager, Set<MoveTo>> OPENERS = new WeakHashMap<>();
+    /** The villager this move opened a door for, while it has one open. */
+    private @Nullable Villager opener;
 
     public MoveTo(BlockPos target, double reach) {
         this(target, reach, false);
@@ -75,8 +99,10 @@ public final class MoveTo implements Task {
         PathNavigation navigation = villager.getNavigation();
         Vec3 center = Vec3.atCenterOf(target);
         double distanceSqr = villager.distanceToSqr(center);
+        closePassedDoors(ctx.level(), villager);
         if (distanceSqr <= reach * reach) {
             navigation.stop();
+            closeDoors(ctx.level());
             return Status.SUCCESS;
         }
         int now = ticksRun;
@@ -99,6 +125,7 @@ public final class MoveTo implements Task {
             lastProgressTick = now;
         } else if (now - lastProgressTick > STUCK_TICKS && !(digOut && !pathReaches)) {
             navigation.stop();
+            closeDoors(ctx.level());
             return Status.FAILED;
         }
         boolean ours = target.equals(navigation.getTargetPos());
@@ -117,6 +144,7 @@ public final class MoveTo implements Task {
             navigation.stop();
             Optional<DigStep> next = digSteps < MAX_DIG_STEPS ? DigStep.toward(ctx.level(), villager, target) : Optional.empty();
             if (next.isEmpty()) {
+                closeDoors(ctx.level());
                 return Status.FAILED;
             }
             digging = true;
@@ -125,8 +153,78 @@ public final class MoveTo implements Task {
             step.start(ctx);
             return Status.RUNNING;
         }
+        openDoorsOnPath(ctx.level(), villager, navigation.getPath());
         villager.getLookControl().setLookAt(center);
         return Status.RUNNING;
+    }
+
+    /** Opens a closed wooden door at the path's previous or next node when the citizen is within {@link #DOOR_REACH}. */
+    private void openDoorsOnPath(ServerLevel level, Villager villager, @Nullable Path path) {
+        if (path == null || path.notStarted() || path.isDone()) {
+            return;
+        }
+        for (BlockPos node : new BlockPos[] {path.getPreviousNode().asBlockPos(), path.getNextNode().asBlockPos()}) {
+            BlockState state = level.getBlockState(node);
+            if (!(state.getBlock() instanceof DoorBlock door) || !state.is(BlockTags.WOODEN_DOORS) || !withinDoorReach(villager, node)) {
+                continue;
+            }
+            BlockPos lower = state.getValue(DoorBlock.HALF) == DoubleBlockHalf.LOWER
+                    ? node.immutable() : node.below();
+            if (!door.isOpen(state)) {
+                door.setOpen(villager, level, level.getBlockState(lower), lower, true);
+                openedDoors.add(lower);
+                OPENERS.computeIfAbsent(villager, key -> new LinkedHashSet<>()).add(this);
+                opener = villager;
+            }
+        }
+    }
+
+    /** Closes the doors this task opened that the citizen is now farther than {@link #DOOR_REACH} from. */
+    private void closePassedDoors(ServerLevel level, Villager villager) {
+        for (Iterator<BlockPos> it = openedDoors.iterator(); it.hasNext(); ) {
+            BlockPos door = it.next();
+            if (!withinDoorReach(villager, door)) {
+                close(level, door);
+                it.remove();
+            }
+        }
+        if (openedDoors.isEmpty()) {
+            forgetOpener();
+        }
+    }
+
+    /** Closes every door this task opened. */
+    private void closeDoors(ServerLevel level) {
+        openedDoors.forEach(door -> close(level, door));
+        openedDoors.clear();
+        forgetOpener();
+    }
+
+    /** Drops this move from {@link #OPENERS}: it has no door open any more. */
+    private void forgetOpener() {
+        if (opener == null) {
+            return;
+        }
+        Set<MoveTo> moves = OPENERS.get(opener);
+        if (moves != null && moves.remove(this) && moves.isEmpty()) {
+            OPENERS.remove(opener);
+        }
+        opener = null;
+    }
+
+    /** Closes {@code pos} if it is still an open wooden door; a door since broken or replaced is left alone. */
+    private static void close(ServerLevel level, BlockPos pos) {
+        if (!level.isLoaded(pos)) {
+            return;
+        }
+        BlockState state = level.getBlockState(pos);
+        if (state.getBlock() instanceof DoorBlock door && state.is(BlockTags.WOODEN_DOORS) && door.isOpen(state)) {
+            door.setOpen(null, level, state, pos, false);
+        }
+    }
+
+    private static boolean withinDoorReach(Villager villager, BlockPos door) {
+        return villager.position().distanceToSqr(Vec3.atBottomCenterOf(door)) <= DOOR_REACH * DOOR_REACH;
     }
 
     /**
@@ -142,8 +240,20 @@ public final class MoveTo implements Task {
         return navigation.createPath(target, accuracy);
     }
 
+    /**
+     * Closes every door a move of {@code villager} opened and has not closed yet. The scheduler calls this while the
+     * citizen yields to vanilla: the move stays current but is not ticked, however deep inside another task it runs.
+     */
+    public static void closeDoorsOpenedBy(ServerLevel level, Villager villager) {
+        Set<MoveTo> moves = OPENERS.remove(villager);
+        if (moves != null) {
+            moves.forEach(move -> move.closeDoors(level));
+        }
+    }
+
     @Override
     public void stop(TaskContext ctx) {
+        closeDoors(ctx.level());
         if (step != null) {
             step.stop(ctx);
             step = null;
