@@ -3,15 +3,24 @@ package dev.andreymudri.villagercity.village.plot;
 import dev.andreymudri.villagercity.village.Footprint;
 import java.util.ArrayList;
 import java.util.List;
+import net.minecraft.core.BlockPos;
+import net.minecraft.util.Mth;
 
 /** Pure plot-validity rules; no world access. */
 public final class PlotRules {
-    public static final int MAX_HEIGHT_VARIANCE = 1;
     public static final int MARGIN = 1;
+    /** Fewest open columns between a house's footprint and another house's or plot's, along x or along z. */
+    public static final int HOUSE_GAP = 5;
+    /** One pad in this many is left empty, so a village has gaps like a vanilla one. */
+    public static final int SKIP_ONE_IN = 8;
 
     private PlotRules() {
     }
 
+    /**
+     * True when the columns are natural ground with no fluid that a floor at {@link #buildY} covers with no earthwork
+     * ({@link Earthwork#needsNone}): what a village without a paver may build on.
+     */
     public static boolean isBuildable(List<Column> columns) {
         if (columns.isEmpty()) {
             return false;
@@ -25,7 +34,7 @@ public final class PlotRules {
             min = Math.min(min, column.groundY());
             max = Math.max(max, column.groundY());
         }
-        return max - min <= MAX_HEIGHT_VARIANCE;
+        return max - min <= Earthwork.FLOOR_SPAN;
     }
 
     public static int buildY(List<Column> columns) {
@@ -36,6 +45,29 @@ public final class PlotRules {
     public static boolean overlapsAny(Footprint candidate, List<Footprint> occupied) {
         Footprint grown = candidate.inflate(MARGIN);
         return occupied.stream().anyMatch(grown::intersects);
+    }
+
+    /**
+     * True when the candidate's footprint comes within {@link #HOUSE_GAP} columns of any of {@code houses} along both
+     * x and z, so fewer than {@link #HOUSE_GAP} open columns lie between them either way.
+     */
+    public static boolean tooCloseToAHouse(Footprint candidate, List<Footprint> houses) {
+        Footprint grown = candidate.inflate(HOUSE_GAP);
+        return houses.stream().anyMatch(grown::intersects);
+    }
+
+    /**
+     * Whether levelling a pad to its floor is work the village can do: none at all without a paver, and with one at
+     * most {@link Earthwork#MAX_VOLUME} blocks moved with no column more than {@link Earthwork#MAX_COLUMN_STEP} off
+     * the floor.
+     */
+    public static boolean earthworkAllowed(int volume, int columnStep, boolean paver) {
+        return paver ? volume <= Earthwork.MAX_VOLUME && columnStep <= Earthwork.MAX_COLUMN_STEP : volume == 0;
+    }
+
+    /** Whether the pad at this origin is one of those left empty: a hash of the origin, so it never changes. */
+    public static boolean skipped(BlockPos origin) {
+        return Math.floorMod(Mth.murmurHash3Mixer(Long.hashCode(Mth.getSeed(origin))), SKIP_ONE_IN) == 0;
     }
 
     /** Horizontal offsets ring by ring (Chebyshev distance), center first; within a ring ordered by dz then dx. */

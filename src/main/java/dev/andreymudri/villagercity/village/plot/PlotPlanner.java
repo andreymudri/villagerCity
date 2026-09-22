@@ -3,6 +3,7 @@ package dev.andreymudri.villagercity.village.plot;
 import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
+import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
 import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import java.util.ArrayList;
@@ -11,6 +12,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Predicate;
+import javax.annotation.Nullable;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.server.level.ServerLevel;
@@ -21,8 +23,9 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
- * Slice 1 plot rule: spiral out from the village center, at most {@link #MAX_REACH} blocks, and take the first buildable
- * spot, trying the spots nearest the houses and storehouse the village already has before the rest ({@link #candidates}). A column's ground is its topmost solid block, accepted within {@link #verticalReach} blocks above and below
+ * Where the next house goes ({@link #findSite}): beside the village's streets once it has any, and before that the first
+ * buildable spot spiralling out from the bell, at most {@link #MAX_REACH} blocks, trying the spots nearest the houses
+ * and storehouse the village already has before the rest ({@link #candidates}). A column's ground is its topmost solid block, accepted within {@link #verticalReach} blocks above and below
  * the bell, so a bell on a hill still finds the village's ground below it while caves and overhangs are never used.
  */
 public final class PlotPlanner {
@@ -52,7 +55,7 @@ public final class PlotPlanner {
     public record Site(BlockPos origin, int earthwork) {
     }
 
-    /** Returns the origin (minimum corner, at the first free y above ground) of a buildable plot. */
+    /** Returns the origin (minimum corner, at the first free y above ground) of a plot needing no earthwork ({@link #findSite} without a paver). */
     public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size) {
         return find(level, village, size, pos -> true);
     }
@@ -63,30 +66,51 @@ public final class PlotPlanner {
     }
 
     /**
-     * The first spot in {@link #candidates} order whose footprint plus {@link PlotRules#MARGIN} is natural ground with no
-     * fluid and no laid path. Ground varying by at most {@link PlotRules#MAX_HEIGHT_VARIANCE} is built at its highest level with no
-     * earthwork. With {@code allowEarthwork}, ground varying by at most {@link Earthwork#MAX_VARIANCE} is also accepted
-     * when levelling it at {@link Earthwork#best} takes at most {@link Earthwork#MAX_VOLUME} blocks; its origin sits on
-     * that floor.
+     * A buildable house pad, or empty. Every pad must lie within the search reach, keep {@link PlotRules#MARGIN} off
+     * whatever the village has built, keep {@link PlotRules#HOUSE_GAP} open columns off every house and plot, and have a
+     * footprint plus margin of natural ground with no fluid and no laid path. Its floor must need earthwork the village
+     * can do ({@link PlotRules#earthworkAllowed}): with {@code allowEarthwork} (a paver) up to the paver's budget, without
+     * it none at all, which still allows ground the floor spans ({@link Earthwork#needsNone}).
+     * <p>
+     * A village with street cells only builds beside its streets: a pad must touch one ({@link #touchingStreets}), its
+     * floor is that street cell's y, one pad in {@link PlotRules#SKIP_ONE_IN} is left empty ({@link PlotRules#skipped}),
+     * and the pads are tried fewest hops first, then least earthwork, then nearest the bell. A village with no street
+     * cells tries the spots in {@link #candidates} order, as before it had streets, and takes the first ({@link #floor}).
      */
     public static Optional<Site> findSite(ServerLevel level, VillageData village, Vec3i size, boolean allowEarthwork, Predicate<BlockPos> originAllowed) {
         BlockPos center = village.center();
-        int reach = Math.min(village.radius() + SEARCH_MARGIN, MAX_REACH);
+        int reach = searchReach(village);
         List<Footprint> occupied = village.occupiedFootprints();
+        List<Footprint> houses = houseFootprints(village);
         boolean anyPath = !village.pathCells().isEmpty();
-        int maxVariance = allowEarthwork ? Earthwork.MAX_VARIANCE : PlotRules.MAX_HEIGHT_VARIANCE;
+        boolean onStreets = !village.streets().isEmpty();
+        Long2ObjectMap<List<StreetCell>> streets = streetColumns(village);
         int[] groundYs = new int[(size.getX() + 2 * PlotRules.MARGIN) * (size.getZ() + 2 * PlotRules.MARGIN)];
+        // Ground spanning more than twice the column step has no floor within the step of every column, and ground
+        // spanning more than FLOOR_SPAN none that needs no earthwork.
+        int maxRange = allowEarthwork ? 2 * Earthwork.MAX_COLUMN_STEP : Earthwork.FLOOR_SPAN;
         Long2ObjectMap<Column> cache = new Long2ObjectOpenHashMap<>();
-        for (int[] offset : candidates(village, reach)) {
+        List<int[]> order = onStreets ? PlotRules.spiral(reach, STEP) : candidates(village, reach);
+        List<Ranked> ranked = new ArrayList<>();
+        for (int i = 0; i < order.size(); i++) {
+            int[] offset = order.get(i);
             int minX = center.getX() + offset[0] - size.getX() / 2;
             int minZ = center.getZ() + offset[1] - size.getZ() / 2;
             Footprint footprint = new Footprint(minX, minZ, minX + size.getX() - 1, minZ + size.getZ() - 1);
             if (!PlotRules.withinReach(footprint, center.getX(), center.getZ(), reach)
-                    || PlotRules.overlapsAny(footprint, occupied)) {
+                    || PlotRules.overlapsAny(footprint, occupied)
+                    || PlotRules.tooCloseToAHouse(footprint, houses)) {
                 continue;
             }
             Footprint area = footprint.inflate(PlotRules.MARGIN);
-            // The same rules as PlotRules.isBuildable, stopping at the first column that rules the spot out.
+            List<StreetCell> touching = List.of();
+            if (onStreets) {
+                touching = touchingStreets(village, streets, area);
+                if (touching.isEmpty()) {
+                    continue;
+                }
+            }
+            // Natural ground, no fluid, no path, stopping at the first column that rules the spot out.
             boolean buildable = true;
             int low = Integer.MAX_VALUE;
             int high = Integer.MIN_VALUE;
@@ -106,27 +130,154 @@ public final class PlotPlanner {
                     low = Math.min(low, column.groundY());
                     high = Math.max(high, column.groundY());
                     groundYs[columns++] = column.groundY();
-                    buildable = column.present() && column.natural() && !column.fluid() && high - low <= maxVariance;
+                    buildable = column.present() && column.natural() && !column.fluid() && high - low <= maxRange;
                 }
             }
             if (!buildable) {
                 continue;
             }
-            Site site;
-            if (high - low <= PlotRules.MAX_HEIGHT_VARIANCE) {
-                site = new Site(new BlockPos(minX, high, minZ), 0);
-            } else {
-                Earthwork.Level best = Earthwork.best(groundYs);
-                if (best.volume() > Earthwork.MAX_VOLUME) {
-                    continue;
-                }
-                site = new Site(new BlockPos(minX, best.floorY(), minZ), best.volume());
+            Floor floor = floor(groundYs, touching, allowEarthwork);
+            if (!floor.accepted()) {
+                continue;
             }
-            if (originAllowed.test(site.origin())) {
-                return Optional.of(site);
+            Site site = new Site(new BlockPos(minX, floor.y(), minZ), floor.earthwork());
+            if (!onStreets) {
+                if (originAllowed.test(site.origin())) {
+                    return Optional.of(site);
+                }
+                continue;
+            }
+            if (!PlotRules.skipped(site.origin())) {
+                ranked.add(new Ranked(site, floor.street().hops(), Math.max(Math.abs(offset[0]), Math.abs(offset[1])), i));
+            }
+        }
+        ranked.sort(Comparator.comparingInt(Ranked::hops)
+                .thenComparingInt(entry -> entry.site().earthwork())
+                .thenComparingInt(Ranked::ring)
+                .thenComparingInt(Ranked::index));
+        for (Ranked entry : ranked) {
+            if (originAllowed.test(entry.site().origin())) {
+                return Optional.of(entry.site());
             }
         }
         return Optional.empty();
+    }
+
+    /** A street pad that passed every rule, with the keys it is ordered by. */
+    private record Ranked(Site site, int hops, int ring, int index) {
+    }
+
+    /** How far from the bell (Chebyshev) a spot's footprint may reach: the village's radius plus {@link #SEARCH_MARGIN}, capped. */
+    public static int searchReach(VillageData village) {
+        return Math.min(village.radius() + SEARCH_MARGIN, MAX_REACH);
+    }
+
+    /** The footprints a pad keeps {@link PlotRules#HOUSE_GAP} columns off: every house and plot, and nothing else. */
+    public static List<Footprint> houseFootprints(VillageData village) {
+        List<Footprint> houses = new ArrayList<>();
+        village.houses().forEach(house -> houses.add(house.footprint()));
+        village.plots().forEach(plot -> houses.add(plot.footprint()));
+        return houses;
+    }
+
+    /**
+     * The floor a pad is levelled to, how much earthwork that takes, the worst column's step, the street cell it opens
+     * onto (null off the streets), and whether the village can do that work.
+     */
+    public record Floor(int y, int earthwork, int columnStep, @Nullable StreetCell street, boolean accepted) {
+    }
+
+    /**
+     * The floor for these ground columns. With no {@code touching} street cells it is the highest column when the floor
+     * there needs no earthwork ({@link Earthwork#needsNone}), else {@link Earthwork#best}. Otherwise it
+     * is one of those cells' y, choosing a floor the village can level before one it cannot, then the fewest hops, then
+     * the least earthwork.
+     */
+    public static Floor floor(int[] groundYs, List<StreetCell> touching, boolean allowEarthwork) {
+        if (touching.isEmpty()) {
+            int high = Arrays.stream(groundYs).max().orElseThrow();
+            if (Earthwork.needsNone(groundYs, high)) {
+                return at(groundYs, high, null, allowEarthwork);
+            }
+            return at(groundYs, Earthwork.best(groundYs).floorY(), null, allowEarthwork);
+        }
+        Floor chosen = null;
+        for (StreetCell street : touching) {
+            Floor floor = at(groundYs, street.pos().getY(), street, allowEarthwork);
+            if (chosen == null || better(floor, chosen)) {
+                chosen = floor;
+            }
+        }
+        return chosen;
+    }
+
+    /** The floor at {@code y}: no earthwork when the floor covers the ground as it lies, else the blocks to cut plus fill. */
+    private static Floor at(int[] groundYs, int y, @Nullable StreetCell street, boolean allowEarthwork) {
+        int earthwork = Earthwork.needsNone(groundYs, y) ? 0 : Earthwork.volume(groundYs, y);
+        int step = Earthwork.maxColumnStep(groundYs, y);
+        return new Floor(y, earthwork, step, street, PlotRules.earthworkAllowed(earthwork, step, allowEarthwork));
+    }
+
+    private static boolean better(Floor a, Floor b) {
+        if (a.accepted() != b.accepted()) {
+            return a.accepted();
+        }
+        if (a.street().hops() != b.street().hops()) {
+            return a.street().hops() < b.street().hops();
+        }
+        return a.earthwork() < b.earthwork();
+    }
+
+    /**
+     * The street cells a pad opens onto: those in a column right beside its footprint plus margin ({@code area}), and
+     * those right beside a laid path cell that is. A street's side cells are path cells but not street cells, so a pad
+     * beside a wide street reaches its centre line through them.
+     */
+    public static List<StreetCell> touchingStreets(VillageData village, Footprint area) {
+        return touchingStreets(village, streetColumns(village), area);
+    }
+
+    private static List<StreetCell> touchingStreets(VillageData village, Long2ObjectMap<List<StreetCell>> streets, Footprint area) {
+        List<StreetCell> touching = new ArrayList<>();
+        Footprint ring = area.inflate(1);
+        for (int x = ring.minX(); x <= ring.maxX(); x++) {
+            for (int z = ring.minZ(); z <= ring.maxZ(); z++) {
+                if (area.contains(x, z)) {
+                    continue;
+                }
+                List<StreetCell> here = streets.get(BlockPos.asLong(x, 0, z));
+                if (here != null) {
+                    addNew(touching, here);
+                } else if (village.isPathColumn(x, z)) {
+                    for (int dx = -1; dx <= 1; dx++) {
+                        for (int dz = -1; dz <= 1; dz++) {
+                            List<StreetCell> beside = streets.get(BlockPos.asLong(x + dx, 0, z + dz));
+                            if (beside != null) {
+                                addNew(touching, beside);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return touching;
+    }
+
+    private static void addNew(List<StreetCell> into, List<StreetCell> cells) {
+        for (StreetCell cell : cells) {
+            if (!into.contains(cell)) {
+                into.add(cell);
+            }
+        }
+    }
+
+    /** The village's street cells by column (x and z only). */
+    private static Long2ObjectMap<List<StreetCell>> streetColumns(VillageData village) {
+        Long2ObjectMap<List<StreetCell>> columns = new Long2ObjectOpenHashMap<>();
+        for (StreetCell cell : village.streets()) {
+            columns.computeIfAbsent(BlockPos.asLong(cell.pos().getX(), 0, cell.pos().getZ()), key -> new ArrayList<>()).add(cell);
+        }
+        return columns;
     }
 
     /**
@@ -176,7 +327,7 @@ public final class PlotPlanner {
      * ceiling). Missing when the column is unloaded or that ground lies more than {@code verticalReach} blocks from the
      * bell, so nothing is ever built in a cave or under an overhang.
      */
-    static Column sample(ServerLevel level, int x, int z, int referenceY, int verticalReach) {
+    public static Column sample(ServerLevel level, int x, int z, int referenceY, int verticalReach) {
         if (!level.isLoaded(new BlockPos(x, referenceY, z))) {
             return Column.MISSING;
         }

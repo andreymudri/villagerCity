@@ -14,7 +14,9 @@ import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.storehouse.StorehouseContent;
 import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
+import dev.andreymudri.villagercity.village.plot.Earthwork;
 import dev.andreymudri.villagercity.village.plot.PlotPlanner;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -42,7 +44,7 @@ public final class VillageCommandTests {
         VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 8, false);
         Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
         BlockPos flat = helper.absolutePos(new BlockPos(18, 1, 18));
-        // A two-block step in the middle of the spot, so the ground varies by more than MAX_HEIGHT_VARIANCE allows.
+        // A two-block step in the middle of the spot, which is earthwork, and a village with no paver may do none.
         BlockPos bump = new BlockPos(30, 1, 30);
         helper.setBlock(bump, Blocks.DIRT);
         helper.setBlock(bump.above(), Blocks.DIRT);
@@ -53,7 +55,7 @@ public final class VillageCommandTests {
 
         helper.assertTrue(onFlat.startsWith("This spot is buildable."), "flat ground was rejected:\n" + onFlat);
         helper.assertFalse(onBump.startsWith("This spot is buildable."), "a step was accepted:\n" + onBump);
-        helper.assertTrue(onBump.contains("varies by"), "no height reason given:\n" + onBump);
+        helper.assertTrue(onBump.contains("NO  earthwork") && onBump.contains("the budget is 0 with no paver"), "no earthwork reason given:\n" + onBump);
         // The planner must agree: it takes the flat spot and never the one the diagnosis rejected.
         BlockPos planned = PlotPlanner.find(helper.getLevel(), village, blueprint.size()).orElseThrow();
         helper.assertTrue(Math.abs(planned.getX() - uneven.getX()) > 1 || Math.abs(planned.getZ() - uneven.getZ()) > 1,
@@ -62,6 +64,64 @@ public final class VillageCommandTests {
         helper.assertTrue(onPlanned.startsWith("This spot is buildable."),
                 "the diagnosis rejected what the planner chose:\n" + onPlanned);
         VillageTestSupport.remove(helper, village);
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_why_budget")
+    public static void whyNamesTheEarthBudgetASpotBroke(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 8, false);
+        try {
+            // A paver on the roster, so the spot is judged against the paver's budget rather than none at all.
+            village.setCitizen(UUID.randomUUID(), JobType.PAVER);
+            Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+            // The 7x7 spot centred on (34, 34): four rows at y5 and three at y1, levelled best at y5 for 21 * 4 = 84 blocks.
+            BlockPos spot = new BlockPos(34, 1, 34);
+            for (int x = 34; x <= 37; x++) {
+                for (int z = 31; z <= 37; z++) {
+                    for (int y = 1; y <= 4; y++) {
+                        helper.setBlock(x, y, z, Blocks.DIRT);
+                    }
+                }
+            }
+            List<String> lines = PlotDiagnostics.explain(helper.getLevel(), village, helper.absolutePos(spot), blueprint.size());
+            String why = String.join("\n", lines);
+            helper.assertTrue(lines.get(0).equals("This spot is not buildable:"), "a spot needing 84 blocks of earth was accepted:\n" + why);
+            helper.assertTrue(why.contains("NO  earthwork: levelling to y" + helper.absolutePos(new BlockPos(0, 5, 0)).getY() + " moves 84 blocks, the budget is "
+                    + Earthwork.MAX_VOLUME + " for the paver"), "the budget it broke is not named:\n" + why);
+            helper.assertTrue(why.contains("yes column step"), "the column step within its limit is not reported as met:\n" + why);
+            helper.assertTrue(lines.stream().filter(line -> line.startsWith("NO  ")).count() == 1, "a rule other than the budget turned it down:\n" + why);
+            // The planner agrees: it never takes that spot.
+            BlockPos corner = helper.absolutePos(spot.offset(-blueprint.size().getX() / 2, 0, -blueprint.size().getZ() / 2));
+            List<BlockPos> offered = new ArrayList<>();
+            PlotPlanner.findSite(helper.getLevel(), village, blueprint.size(), true, pos -> !offered.add(pos));
+            helper.assertTrue(offered.stream().noneMatch(pos -> pos.getX() == corner.getX() && pos.getZ() == corner.getZ()),
+                    "the planner offered the spot the diagnosis refused for earthwork");
+            helper.assertFalse(offered.isEmpty(), "the planner offered nothing at all, so the agreement proves nothing");
+        } finally {
+            VillageTestSupport.remove(helper, village);
+        }
+        helper.succeed();
+    }
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_why_street")
+    public static void whyReportsTheStreetASpotOpensOnto(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 8, false);
+        try {
+            Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+            for (int x = 10; x <= 38; x++) {
+                village.addStreetCell(helper.absolutePos(new BlockPos(x, 1, 30)), 2);
+            }
+            // Centre (16, 26): the footprint is z 24..28 and its margin z 23..29, right beside the street at z 30.
+            String beside = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, helper.absolutePos(new BlockPos(16, 1, 26)), blueprint.size()));
+            String away = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, helper.absolutePos(new BlockPos(16, 1, 12)), blueprint.size()));
+            helper.assertTrue(beside.contains("(the street's height, 2 hops out)"), "the street beside the spot is not reported:\n" + beside);
+            helper.assertTrue(away.contains("NO  street: the spot touches no street; the nearest street cell is 18 blocks away, 2 hops out"),
+                    "a spot away from the street was not turned down for it:\n" + away);
+        } finally {
+            VillageTestSupport.remove(helper, village);
+        }
         helper.succeed();
     }
 
