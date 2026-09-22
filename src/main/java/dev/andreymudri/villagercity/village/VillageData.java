@@ -1,6 +1,5 @@
 package dev.andreymudri.villagercity.village;
 
-import dev.andreymudri.villagercity.VillagerCity;
 import dev.andreymudri.villagercity.citizen.JobType;
 import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
 import java.util.ArrayList;
@@ -359,12 +358,9 @@ public final class VillageData {
         return houses.size();
     }
 
-    /** Records a finished building; one built from a village blueprint ({@code villagercity:}) also queues a path to the bell. */
+    /** Records a finished building. Houses stand on streets, so none queues a path to the bell. */
     public void addHouse(BuildingRecord house) {
         houses.add(house);
-        if (house.blueprint().startsWith(VillagerCity.MODID + ":")) {
-            queuePath(house.origin());
-        }
         radius = Math.max(radius, farthestCorner(house.footprint()) + RADIUS_PADDING);
     }
 

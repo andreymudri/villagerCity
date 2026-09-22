@@ -120,13 +120,15 @@ public final class VillageRegistryTests {
     }
 
     @GameTest(template = GameTestSupport.TEST_AREA)
-    public static void addHouseQueuesAPathOnlyForVillageBlueprints(GameTestHelper helper) {
+    public static void aFinishedHouseQueuesNoPath(GameTestHelper helper) {
         VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
         BlockPos built = helper.absolutePos(new BlockPos(5, 1, 5));
         BlockPos vanilla = helper.absolutePos(new BlockPos(30, 1, 30));
         village.addHouse(new BuildingRecord("villagercity:blueprint/starter_house", built, new Vec3i(5, 5, 5)));
         village.addHouse(new BuildingRecord("minecraft:home", vanilla, new Vec3i(1, 1, 1)));
-        helper.assertTrue(village.pathQueue().equals(List.of(built)), "path queue " + village.pathQueue());
+        helper.assertTrue(village.pathQueue().isEmpty(), "a finished house queued a path: " + village.pathQueue());
+        // A queue an older save still holds can be drained.
+        village.queuePath(built);
         helper.assertTrue(village.removeQueuedPath(built) && village.pathQueue().isEmpty(), "queued path not removed: " + village.pathQueue());
         helper.assertTrue(!village.removeQueuedPath(built), "removed a path that was not queued");
         helper.succeed();
