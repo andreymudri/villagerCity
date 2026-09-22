@@ -24,11 +24,12 @@ import net.minecraft.tags.FluidTags;
 
 /**
  * The paver's street work: grows the village's street graph one straight run at a time. A run starts at a street end
- * ({@link VillageData#streetEnds}), goes away from the bell, and lays up to {@link #RUN_LENGTH} centre cells, each
- * with a side cell on either hand at the centre's own height, so a street is {@link #WIDTH} cells wide. Every cell is
- * classified by {@link PathRoute#cellAt} and built by {@link PathWork#planCell}. The three cells of one slice across
- * the street are recorded together once all three are built: the sides as path cells, the centre as a street cell
- * one hop deeper than the end the run started from.
+ * ({@link VillageData#streetEnds}), or at the bell while the graph is empty, goes away from the bell, and lays up to
+ * {@link #RUN_LENGTH} centre cells, each with a side cell on either hand at the centre's own height, so a street is
+ * {@link #WIDTH} cells wide. Every cell is classified by {@link PathRoute#cellAt} and built by
+ * {@link PathWork#planCell}. The three cells of one slice across the street are recorded together once all three are
+ * built: the sides as path cells, the centre as a street cell one hop deeper than the end the run started from. A run
+ * ends before a slice that a house or plot recorded since the run was laid out now covers.
  *
  * <p>The run being laid, and the cells this job gave up on after {@link PathWork#MAX_CONSECUTIVE_FAILURES} failed
  * tasks, are held only in memory: a fresh job starts a new run from whichever end the graph now has.
@@ -91,7 +92,12 @@ public final class StreetWork implements Job {
             slices = layout(level, village, run, refused, RUN_LENGTH);
         }
         int hops = run.end().hops() + 1;
+        List<Footprint> occupied = village.occupiedFootprints();
         for (Slice slice : slices) {
+            if (covered(slice, occupied)) {
+                // A plot claimed, or a house recorded, since the run was laid out: the run ends before it.
+                break;
+            }
             for (PathRoute.Cell cell : slice.cells()) {
                 PathWork.CellStep step = PathWork.planCell(ctx, village, cell, this::dropRun);
                 if (step.task() != null) {
@@ -132,6 +138,17 @@ public final class StreetWork implements Job {
         }
     }
 
+    /** Whether any cell of {@code slice} lies on one of the {@code occupied} footprints. */
+    private static boolean covered(Slice slice, List<Footprint> occupied) {
+        for (PathRoute.Cell cell : slice.cells()) {
+            BlockPos pos = cell.surface();
+            if (occupied.stream().anyMatch(footprint -> footprint.contains(pos.getX(), pos.getZ()))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Forgets the run being laid, so the next {@link #plan} starts a new one from the graph as it now is. */
     private void dropRun(BlockPos obstruction) {
         if (run != null) {
@@ -144,7 +161,7 @@ public final class StreetWork implements Job {
     /**
      * The run to lay next: from the street end with the fewest hops (below {@link #MAX_HOPS}), preferring an end level
      * with the cell it grew from, in the direction that takes it farthest from the bell among those whose first slice
-     * can be laid. Empty when no end can grow. An empty graph has no ends.
+     * can be laid. Empty when no end can grow. An empty graph grows from the bell: its own cell is the root end, at hop 0.
      */
     public static Optional<Run> nextRun(ServerLevel level, VillageData village) {
         return nextRun(level, village, Set.of());
@@ -152,9 +169,13 @@ public final class StreetWork implements Job {
 
     private static Optional<Run> nextRun(ServerLevel level, VillageData village, Set<Long> refused) {
         List<StreetCell> streets = village.streets();
+        BlockPos bell = village.center();
         List<StreetCell> ends = new ArrayList<>(village.streetEnds().stream().filter(end -> end.hops() < MAX_HOPS).toList());
         ends.sort(Comparator.comparingInt(StreetCell::hops).thenComparing(end -> !levelWithParent(streets, end)));
-        BlockPos bell = village.center();
+        if (streets.isEmpty()) {
+            // The first run starts at the bell: its own cell is the root, at hop 0, though it is never recorded.
+            ends.add(new StreetCell(bell, 0));
+        }
         for (StreetCell end : ends) {
             for (Direction direction : awayFromBell(end.pos(), bell)) {
                 Run candidate = new Run(end, direction);

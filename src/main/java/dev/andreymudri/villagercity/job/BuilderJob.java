@@ -48,8 +48,10 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * Takes over a released plot once its retry time has passed, or else claims a new plot once the storehouse holds a
- * full blueprint's materials. A plot needing earthwork is only claimed while the village has a paver, and the builder
- * waits until the paver has prepared it, handing a plot that stays unprepared back after
+ * full blueprint's materials. In a village with a paver the new plot must open onto a street ({@link PlotPlanner}
+ * chooses it), so until the paver has laid one the builder waits for {@code "a street to build on"}; a village with no
+ * paver builds where it can without streets. A plot needing earthwork is only claimed while the village has a paver,
+ * and the builder waits until the paver has prepared it, handing a plot that stays unprepared back after
  * {@link #PREPARATION_WAIT_TICKS} of working time. Then it withdraws what is missing, and clears and places blocks in
  * build order. Progress lives in the world and the plot record, so a reloaded or replacement builder resumes by
  * skipping blocks that are already right. A plot that keeps failing to build is released for a cooldown, and dropped
@@ -337,18 +339,25 @@ public final class BuilderJob implements Job {
             waitingFor = "materials: " + shortfall(level, storehouse, blueprint.get().requiredMaterials());
             return Optional.empty();
         }
+        // A village with a paver builds only beside its streets, which the paver grows while nothing is buildable.
+        boolean paver = village.jobCount(JobType.PAVER) > 0;
+        String noPlot = paver ? "a street to build on" : "a buildable plot near the bell";
+        if (paver && village.streets().isEmpty()) {
+            waitingFor = noPlot;
+            return Optional.empty();
+        }
         if (level.getGameTime() < village.nextPlotSearch()) {
-            waitingFor = "a buildable plot near the bell";
+            waitingFor = noPlot;
             return Optional.empty();
         }
         long now = level.getGameTime();
         int[] pathChecks = {0};
-        Optional<PlotPlanner.Site> site = PlotPlanner.findSite(level, village, blueprint.get().size(), village.jobCount(JobType.PAVER) > 0,
+        Optional<PlotPlanner.Site> site = PlotPlanner.findSite(level, village, blueprint.get().size(), paver,
                 spot -> !village.isFailedPlot(spot) && !village.isPlotUnreachable(spot, now)
                         && pathChecks[0]++ < PATH_CHECKS_PER_SEARCH && reachable(ctx.villager(), village, spot, now));
         if (site.isEmpty()) {
             village.setNextPlotSearch(now + PLOT_SEARCH_RETRY_TICKS);
-            waitingFor = "a buildable plot near the bell";
+            waitingFor = noPlot;
             return Optional.empty();
         }
         Plot plot = new Plot(UUID.randomUUID(), blueprint.get().id().toString(), site.get().origin(), blueprint.get().size(), ctx.villager().getUUID(),
