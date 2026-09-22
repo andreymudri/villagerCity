@@ -212,6 +212,10 @@ only for costing the paver more than it can move.
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/plot/PlotPlanner.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/MovementTests.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/PlotPlannerTests.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/citizen/Task.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/citizen/TaskScheduler.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/CitizenRoster.java`
+- Test: `src/main/java/dev/andreymudri/villagercity/gametest/TaskSchedulerTests.java`
 
 **Depends:** T4
 
@@ -239,3 +243,6 @@ only for costing the paver more than it can move.
       opens a door on the path. MoveTo opens a closed wooden door on its path when the citizen reaches it, and closes it
       once through. (b) A pad claimed straight ahead of the only street end caps the graph for good. PlotPlanner keeps
       a pad's footprint inflated by the margin off the first slice straight ahead of every street end.
+- [ ] **Step 5:** A door MoveTo opened must never stay open. Close it when the scheduler yields the citizen to vanilla
+      (night, sleep, panic, trading, raid), and when the citizen leaves the level (death, discard, chunk unload). Tests
+      cover the yield, the release/stop path and the removal.
