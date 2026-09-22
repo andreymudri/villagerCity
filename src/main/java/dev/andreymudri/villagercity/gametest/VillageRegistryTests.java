@@ -46,9 +46,7 @@ public final class VillageRegistryTests {
         BlockPos queuedHouse = helper.absolutePos(new BlockPos(40, 1, 40));
         village.queuePath(queuedHouse);
         BlockPos table = helper.absolutePos(new BlockPos(19, 1, 22));
-        BlockPos furnace = helper.absolutePos(new BlockPos(19, 1, 26));
         village.setCraftingTablePos(table);
-        village.setFurnacePos(furnace);
         village.ledger().record(UUID.randomUUID(), ContributionCategory.DEPOSIT, 42);
         BlockPos felling = helper.absolutePos(new BlockPos(10, 1, 30));
         village.startFelling(felling);
@@ -67,7 +65,6 @@ public final class VillageRegistryTests {
         helper.assertTrue(copy.pathCells().contains(pathCell) && copy.isPathColumn(pathCell.getX(), pathCell.getZ()), "path cells lost on reload: " + copy.pathCells());
         helper.assertTrue(copy.pathQueue().contains(queuedHouse), "path queue lost on reload: " + copy.pathQueue());
         helper.assertTrue(table.equals(copy.craftingTablePos()), "crafting table lost on reload: " + copy.craftingTablePos());
-        helper.assertTrue(furnace.equals(copy.furnacePos()), "furnace lost on reload: " + copy.furnacePos());
         String before = VillageCodecs.VILLAGE.encodeStart(JsonOps.INSTANCE, village).getOrThrow().toString();
         String after = VillageCodecs.VILLAGE.encodeStart(JsonOps.INSTANCE, copy).getOrThrow().toString();
         helper.assertTrue(before.equals(after), "round trip changed data:\n" + before + "\n" + after);
@@ -108,19 +105,14 @@ public final class VillageRegistryTests {
     public static void workshopBlocksCountAsOccupied(GameTestHelper helper) {
         VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
         BlockPos table = helper.absolutePos(new BlockPos(19, 1, 22));
-        BlockPos furnace = helper.absolutePos(new BlockPos(19, 1, 26));
         Footprint tableFootprint = Footprint.of(table, new Vec3i(1, 1, 1));
-        Footprint furnaceFootprint = Footprint.of(furnace, new Vec3i(1, 1, 1));
-        helper.assertTrue(!village.occupiedFootprints().contains(tableFootprint) && !village.occupiedFootprints().contains(furnaceFootprint),
-                "workshop footprints occupied before the workshop was set: " + village.occupiedFootprints());
+        helper.assertTrue(!village.occupiedFootprints().contains(tableFootprint),
+                "workshop footprint occupied before the workshop was set: " + village.occupiedFootprints());
         village.setCraftingTablePos(table);
-        village.setFurnacePos(furnace);
         helper.assertTrue(village.occupiedFootprints().contains(tableFootprint), "crafting table not occupied: " + village.occupiedFootprints());
-        helper.assertTrue(village.occupiedFootprints().contains(furnaceFootprint), "furnace not occupied: " + village.occupiedFootprints());
         village.setCraftingTablePos(null);
-        village.setFurnacePos(null);
-        helper.assertTrue(!village.occupiedFootprints().contains(tableFootprint) && !village.occupiedFootprints().contains(furnaceFootprint),
-                "workshop footprints still occupied after clearing the workshop: " + village.occupiedFootprints());
+        helper.assertTrue(!village.occupiedFootprints().contains(tableFootprint),
+                "workshop footprint still occupied after clearing the workshop: " + village.occupiedFootprints());
         helper.succeed();
     }
 

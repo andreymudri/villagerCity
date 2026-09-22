@@ -9,9 +9,11 @@ command it RTS-style.
 > builder, gathers wood, and builds a house block by block, including after a save and reload. The slice 1
 > follow-up fixes have landed: citizens respect `doMobGriefing` and protection mods, and the storehouse credit
 > can no longer be farmed. The lumberjack now fells every vanilla sapling tree whole and never a build, and the
-> builder finds plots in hilly villages. Known open issues are listed under [Known issues](#known-issues).
+> builder finds plots in hilly villages. Three more jobs have landed: an artisan crafts what the village is short
+> of, a paver levels building sites and lays paths, and a lamplighter lights the village. Known open issues are
+> listed under [Known issues](#known-issues).
 
-## What works today (slice 1)
+## What works today
 
 - **Village detection:** every 5 seconds, any vanilla village (a bell with a villager nearby) within 128 blocks
   of a player is registered.
@@ -28,8 +30,9 @@ command it RTS-style.
     older saves keep their contents.
 - **World rules:** citizens only break or place blocks when `doMobGriefing` is on and no protection event
   cancels the change.
-- **Jobs:** the first two adult villagers with no vanilla profession become a **lumberjack** (given a stone axe)
-  and a **builder**.
+- **Jobs:** adult villagers with no vanilla profession are hired one per job, in this order: a **lumberjack**
+  (given a stone axe), a **builder**, an **artisan**, a **paver** (given a stone pickaxe) and a **lamplighter**.
+  A village with only two such villagers works as before, with just a lumberjack and a builder.
 - **Jobs survive absence:** workers are kept on a saved village roster, so a worker in an unloaded chunk is not
   replaced. A worker that dies, converts or changes dimension frees its job for a new hire.
 - **Lumberjack:** fells whole natural trees, including branched and 2×2 trees (dark oak, mega spruce, mega
@@ -46,6 +49,20 @@ command it RTS-style.
   can walk to. A plot whose builder gives up is retried after two minutes and dropped after the third try, and a
   dropped spot is never picked again; a plot whose builder dies or leaves is taken over at once. A resumed plot
   needs only the materials for the missing blocks.
+- **Artisan:** crafts, at a crafting table beside the storehouse, what the builder and the lamplighter are short
+  of: planks, doors and other blueprint materials from logs, and torches from coal or charcoal and sticks. It
+  never spends stock another job is counting on. The village pays for its crafting table (one log, or four planks)
+  and places it only when it has stock to spare, so breaking the table never yields a free one. **The village does
+  not smelt:** glass and charcoal come from the player. When an order needs smelting, the artisan asks for the
+  smelted item (`materials: glass`, `materials: charcoal`), never its raw material, and goes on with the orders it
+  can fill. A furnace an older version placed is left standing and never touched.
+- **Paver:** levels building sites on uneven ground by cutting and filling. Dug earth is reused as fill, then dirt,
+  cobblestone or stone from the storehouse. When a house is finished it lays a path from the door to the bell,
+  with one-block steps and oak plank bridges. With a paver on the roster the builder also takes plots on slopes;
+  without one it builds on flat ground only.
+- **Lamplighter:** keeps up to 16 torches in stock (the artisan makes them) and places them on dark ground inside
+  the village until nowhere in it is dark enough for monsters to spawn, then rescans every minute. The starter
+  house has a torch inside.
 - **Trapped citizens dig out:** a worker stuck in a cave that cannot path to the storehouse or its plot digs a
   staircase through natural ground (stone, dirt, sand, gravel, ores) toward it. It never digs build blocks, blocks
   next to water or lava, or anything `doMobGriefing` or a protection mod forbids. A builder only abandons a plot
@@ -110,9 +127,11 @@ The first `runClient` or `build` downloads and decompiles Minecraft and takes se
    An idle citizen says what it waits for, for example
    `task=idle (waiting for materials: oak_planks x57)` or `task=idle (waiting for a buildable plot near the
    bell)`; `task=sleeping`, `task=trading` or `task=rest` mean vanilla has the villager for now.
-5. Villagers cannot craft yet, so stock the storehouse with the starter house materials: exactly 25 cobblestone,
-   57 oak planks, 12 oak logs, 2 glass, an oak door and a red bed. Only these exact items count (birch planks do
-   not). The lumberjack supplies more logs over time, of whatever trees grow nearby.
+5. With an artisan hired (a third unemployed villager), stock the storehouse with oak logs, 25 cobblestone,
+   2 glass, 3 white wool, 3 red dye and a coal: the artisan crafts the planks, the door, the bed and the torch the
+   house needs. The village does not smelt, so bring glass from your own furnace, not sand. Without an artisan,
+   stock the finished materials instead: 25 cobblestone, 57 oak planks, 12 oak logs, 2 glass, an oak door, a red
+   bed and a torch. The lumberjack supplies more logs over time, of whatever trees grow nearby.
 6. Watch the builder claim a plot and build; `/villagercity village` shows the house count go up when it
    finishes. Villagers work only during the day.
 
@@ -127,6 +146,13 @@ into `~/.minecraft/mods/`.
 - Villagers with nothing to do stand still instead of returning to their vanilla routine.
 - A plot the builder gives up on three times is left as a partial ruin, and the next house again needs a full
   set of materials.
+- The village does not smelt. Glass and charcoal must come from a player.
+- The artisan crafts only for the builder and the lamplighter. It uses shaped and shapeless crafting-table
+  recipes only, never a smithing table, stonecutter or loom, and never a recipe that leaves a bucket or bottle.
+- The artisan can order again materials the builder is already carrying, and turn spare logs into planks nobody
+  needs.
+- Paths link each house to the bell, not houses to each other. The paver builds no retaining walls or stair
+  blocks, and the lamplighter lights no caves or building interiors.
 - The starter house needs oak specifically; villages among birch or spruce need the player to bring oak.
 - Lumberjack limits:
   - log builds placed before the mod was installed, or with commands, are protected only by their shape
