@@ -208,6 +208,10 @@ only for costing the paver more than it can move.
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/PaverJob.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/VillageWorksEndToEndTests.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/StreetGrowthTests.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/citizen/task/MoveTo.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/plot/PlotPlanner.java`
+- Test: `src/main/java/dev/andreymudri/villagercity/gametest/MovementTests.java`
+- Test: `src/main/java/dev/andreymudri/villagercity/gametest/PlotPlannerTests.java`
 
 **Depends:** T4
 
@@ -229,3 +233,9 @@ only for costing the paver more than it can move.
       plateau edge beside the bell that ends with the first street level with the bell. (b) Pin the paver's order in a
       test: an unprepared plot and a street that can still grow exist together, and the paver prepares the plot first.
       Swapping `prep.plan` and `streets.plan` in `PaverJob.plan` must fail it.
+- [ ] **Step 4:** Two defects the slope test exposed. (a) A builder that finishes a house from the inside cannot
+      leave through the closed door and stays "stuck". Likely cause, still to be confirmed with a failing test first:
+      MoveTo drives the navigation directly and never sets the brain's PATH memory, so vanilla's InteractWithDoor never
+      opens a door on the path. MoveTo opens a closed wooden door on its path when the citizen reaches it, and closes it
+      once through. (b) A pad claimed straight ahead of the only street end caps the graph for good. PlotPlanner keeps
+      a pad's footprint inflated by the margin off the first slice straight ahead of every street end.
