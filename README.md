@@ -71,6 +71,8 @@ command it RTS-style.
   staircase through natural ground (stone, dirt, sand, gravel, ores) toward it. It never digs build blocks, blocks
   next to water or lava, or anything `doMobGriefing` or a protection mod forbids. A builder only abandons a plot
   for failures at the plot itself, not for failing to reach the storehouse.
+- **Doors:** a citizen whose way leads through a closed wooden door opens it when it gets there and closes it again
+  once it is past, so a builder that finishes a house from the inside walks out. Iron doors stay shut.
 - **Save-safe:** in-flight work is not saved; jobs re-plan from the world after a reload.
 
 ### Street-first growth
@@ -90,8 +92,9 @@ bell:
 - **Houses go beside streets:** a pad's footprint plus its one-block margin must touch a street, and the house floor
   is that street's height. The paver levels the pad if it needs at most **80** blocks of cut plus fill and no column
   more than **6** off the floor. Houses and plots keep at least **5** open columns between them, and **one pad in
-  eight** is left empty, so the village has gaps. Pads on fewer hops come first, then those needing less earthwork,
-  then those nearer the bell.
+  eight** is left empty, so the village has gaps. A pad never covers, even with its margin, the three cells straight
+  ahead of a street end, where the next run from that end starts, so a house does not cap a street. Pads on fewer
+  hops come first, then those needing less earthwork, then those nearer the bell.
 - **When nothing can grow,** every street end blocked or at its limits, the paver reports `waiting for room to grow`.
 - A village with **no paver** keeps the old rule: flat plots near the bell, and no streets.
 
@@ -182,10 +185,9 @@ into `~/.minecraft/mods/`.
   recipes only, never a smithing table, stonecutter or loom, and never a recipe that leaves a bucket or bottle.
 - The artisan can order again materials the builder is already carrying, and turn spare logs into planks nobody
   needs.
-- Streets have no junctions or crossings: each run is a straight line from a street end. A house claimed right
-  ahead of the only street end blocks it, and the village then waits for room to grow with no house to add. In a
-  test on a slope, with the first street running along the contour, the builder claimed exactly that pad.
-- A builder can finish a house while standing inside it and then stay shut in behind the closed door.
+- Streets have no junctions or crossings: each run is a straight line from a street end, so a street whose ends
+  are all blocked stops growing for good. Pads keep off the cells straight ahead of a street end, but a street of a
+  single cell has no direction yet, so a house beside it can still block its continuation.
 - Houses do not face the street; the door is always on the same side of the blueprint.
 - The paver builds no retaining walls or stair blocks, and the lamplighter lights no caves or building interiors.
 - The starter house needs oak specifically; villages among birch or spruce need the player to bring oak.

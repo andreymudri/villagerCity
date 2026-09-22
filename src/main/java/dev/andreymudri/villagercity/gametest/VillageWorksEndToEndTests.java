@@ -1,11 +1,23 @@
 package dev.andreymudri.villagercity.gametest;
 
 import dev.andreymudri.villagercity.VillagerCity;
+import dev.andreymudri.villagercity.blueprint.Blueprint;
+import dev.andreymudri.villagercity.blueprint.BlueprintPlacement;
+import dev.andreymudri.villagercity.blueprint.Blueprints;
+import dev.andreymudri.villagercity.citizen.Job;
+import dev.andreymudri.villagercity.citizen.JobType;
+import dev.andreymudri.villagercity.job.BuilderJob;
+import dev.andreymudri.villagercity.job.LamplighterJob;
+import dev.andreymudri.villagercity.job.PaverJob;
 import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
+import dev.andreymudri.villagercity.storehouse.StorehouseContent;
+import dev.andreymudri.villagercity.village.BuildingRecord;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
+import dev.andreymudri.villagercity.village.VillageRegistry;
 import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
+import dev.andreymudri.villagercity.village.plot.PlotRules;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,6 +27,7 @@ import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -159,6 +172,102 @@ public final class VillageWorksEndToEndTests {
             int dark = darkColumns(helper, village);
             helper.assertTrue(dark == 0, dark + " columns of village ground are still dark enough to spawn monsters");
             VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** The slope {@link #aSlopeVillageBuildsTwoHousesOnItsStreets} stands on: one block up for every four south. */
+    private static int slope(int x, int z) {
+        return z / 4;
+    }
+
+    /**
+     * What {@link #aSlopeVillageBuildsTwoHousesOnItsStreets} starts with: the finished materials of two starter houses,
+     * torches for the lamplighter, dirt and cobblestone for the paver's fill and oak planks for its bridges.
+     */
+    private static Map<Item, Integer> slopeSupplies(Blueprint blueprint) {
+        Map<Item, Integer> supplies = new LinkedHashMap<>();
+        blueprint.requiredMaterials().forEach((item, count) -> supplies.merge(item, count * 2, Integer::sum));
+        supplies.merge(Items.TORCH, 64, Integer::sum);
+        supplies.merge(Items.DIRT, 256, Integer::sum);
+        supplies.merge(Items.COBBLESTONE, 64, Integer::sum);
+        supplies.merge(Items.OAK_PLANKS, 64, Integer::sum);
+        return supplies;
+    }
+
+    private static void stockedStorehouse(GameTestHelper helper, VillageData village, BlockPos relative, Map<Item, Integer> supplies) {
+        helper.setBlock(relative, StorehouseContent.BLOCK.get());
+        village.setStorehousePos(helper.absolutePos(relative));
+        StorehouseBlockEntity storehouse = helper.getBlockEntity(relative);
+        supplies.forEach((item, count) -> {
+            int left = count;
+            while (left > 0) {
+                int stack = Math.min(left, new ItemStack(item).getMaxStackSize());
+                storehouse.insertFromCitizen(new ItemStack(item, stack));
+                left -= stack;
+            }
+        });
+    }
+
+    /** Spawns a villager standing on the slope and puts it on the village's roster running {@code job}. */
+    private static Villager enroll(GameTestHelper helper, VillageData village, int x, int z, JobType type, ItemStack tool,
+            Job job) {
+        Villager villager = GameTestSupport.spawnVillager(helper, x, slope(x, z) + 1, z);
+        CitizenTestSupport.enroll(villager, village, type, tool, job);
+        village.setCitizen(villager.getUUID(), type);
+        return villager;
+    }
+
+    /** Open columns between two footprints along whichever of x and z they are farther apart on. */
+    private static int gap(Footprint a, Footprint b) {
+        int x = Math.max(b.minX() - a.maxX(), a.minX() - b.maxX()) - 1;
+        int z = Math.max(b.minZ() - a.maxZ(), a.minZ() - b.maxZ()) - 1;
+        return Math.max(x, z);
+    }
+
+    /**
+     * An unmanaged village on a slope climbing one block in four, with a storehouse, a paver, a builder and a
+     * lamplighter on its roster. The paver lays three-wide streets from the bell; the builder builds two houses beside
+     * them, each at the height of a street it touches and at least {@link PlotRules#HOUSE_GAP} columns from the other,
+     * every block as the blueprint has it; the lamplighter lights the village until no monster could spawn there.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_works_e2e_slope", timeoutTicks = 36000, skyAccess = true)
+    public static void aSlopeVillageBuildsTwoHousesOnItsStreets(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        StreetTests.terrain(helper, VillageWorksEndToEndTests::slope);
+        BlockPos bell = new BlockPos(BELL.getX(), slope(BELL.getX(), BELL.getZ()) + 1, BELL.getZ());
+        VillageData village = VillageTestSupport.freshVillage(helper, bell, RADIUS, false);
+        int darkAtStart = darkColumns(helper, village);
+        if (darkAtStart == 0) {
+            VillageTestSupport.remove(helper, village);
+            helper.fail("the bare slope has no dark ground, so this test cannot tell a lit village from an unlit one");
+        }
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        BlockPos storehouse = new BlockPos(18, slope(18, 30) + 1, 30);
+        stockedStorehouse(helper, village, storehouse, slopeSupplies(blueprint));
+        enroll(helper, village, 22, 20, JobType.PAVER, new ItemStack(Items.STONE_PICKAXE), new PaverJob());
+        enroll(helper, village, 26, 20, JobType.BUILDER, ItemStack.EMPTY, new BuilderJob());
+        enroll(helper, village, 24, 28, JobType.LAMPLIGHTER, ItemStack.EMPTY, new LamplighterJob());
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.houseCount() == 2, "houses " + village.houseCount() + ", streets " + village.streets().size()
+                    + ", plots " + village.plots().stream().map(plot -> StreetTests.relative(helper, plot.origin()).toShortString()
+                    + (plot.prepared() ? " prepared" : " unprepared")).toList());
+            assertThreeWideStreets(helper, village);
+            List<BuildingRecord> houses = village.houses();
+            for (BuildingRecord house : houses) {
+                StreetGrowthTests.assertOnAStreet(helper, village, house);
+                for (BlueprintPlacement placement : blueprint.placements()) {
+                    BlockPos pos = house.origin().offset(placement.offset());
+                    helper.assertTrue(helper.getLevel().getBlockState(pos).is(placement.state().getBlock()), "wrong block at "
+                            + StreetTests.relative(helper, pos).toShortString() + ": " + helper.getLevel().getBlockState(pos));
+                }
+            }
+            int gap = gap(houses.get(0).footprint(), houses.get(1).footprint());
+            helper.assertTrue(gap >= PlotRules.HOUSE_GAP, "only " + gap + " columns lie between the two houses");
+            int dark = darkColumns(helper, village);
+            helper.assertTrue(dark == 0, dark + " columns of village ground are still dark enough to spawn monsters");
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(VillageRegistry.get(helper.getLevel()).all().stream().noneMatch(v -> v.id().equals(village.id())),
+                    "the village is still registered");
         });
     }
 }

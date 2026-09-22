@@ -190,4 +190,52 @@ public final class PlotPlannerTests {
             helper.assertTrue(level.getGameTime() - failedAt >= StorehouseService.SEARCH_RETRY_TICKS, "searched again after only " + (level.getGameTime() - failedAt) + " ticks");
         });
     }
+
+    /**
+     * A street running north from the bell, (24, 1, 23) to its end at (24, 1, 16), with its side cells. The only natural
+     * ground is the patch x 18 to 30, z 8 to 15 straight ahead of the end, cobblestone everywhere else, so every pad that
+     * touches the street lies across the slice the next run would lay from the end, (23 to 25, 15). No pad is found:
+     * a house there would cap the street for good.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void noPadCapsTheSliceStraightAheadOfAStreetEnd(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if (x < 18 || x > 30 || z < 8 || z > 15) {
+                    helper.setBlock(x, 0, z, Blocks.COBBLESTONE);
+                }
+            }
+        }
+        VillageData village = village(helper);
+        for (int z = 23; z >= 16; z--) {
+            village.addStreetCell(helper.absolutePos(new BlockPos(24, 1, z)), 1);
+            village.addPathCell(helper.absolutePos(new BlockPos(23, 1, z)));
+            village.addPathCell(helper.absolutePos(new BlockPos(25, 1, z)));
+        }
+        Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true);
+        helper.assertTrue(site.isEmpty(), "a pad at " + site.map(found -> relative(helper, found.origin()).toShortString()).orElse("")
+                + " lies across the slice ahead of the street end");
+        helper.succeed();
+    }
+
+    /** As {@link #noPadCapsTheSliceStraightAheadOfAStreetEnd}, but with natural ground beside the street too: a pad is found. */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void aPadBesideTheStreetIsStillFound(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = village(helper);
+        for (int z = 23; z >= 16; z--) {
+            village.addStreetCell(helper.absolutePos(new BlockPos(24, 1, z)), 1);
+            village.addPathCell(helper.absolutePos(new BlockPos(23, 1, z)));
+            village.addPathCell(helper.absolutePos(new BlockPos(25, 1, z)));
+        }
+        Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true);
+        helper.assertTrue(site.isPresent(), "no pad beside the street");
+        Footprint area = Footprint.of(site.get().origin(), HOUSE).inflate(PlotRules.MARGIN);
+        helper.assertFalse(area.intersects(new Footprint(helper.absolutePos(new BlockPos(23, 1, 15)).getX(),
+                helper.absolutePos(new BlockPos(23, 1, 15)).getZ(), helper.absolutePos(new BlockPos(25, 1, 15)).getX(),
+                helper.absolutePos(new BlockPos(25, 1, 15)).getZ())), "the pad at " + relative(helper, site.get().origin()).toShortString()
+                + " lies across the slice ahead of the street end");
+        helper.succeed();
+    }
 }

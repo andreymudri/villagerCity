@@ -9,6 +9,7 @@ import dev.andreymudri.villagercity.citizen.task.PickUpItems;
 import dev.andreymudri.villagercity.village.VillageData;
 import java.util.List;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.tags.ItemTags;
@@ -16,6 +17,11 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.DoorBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
@@ -76,6 +82,78 @@ public final class MovementTests {
             helper.assertTrue(helper.getTick() > 320, "still night");
             helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results);
             helper.assertTrue(Inventories.count(villager.getInventory(), s -> s.is(Items.OAK_LOG)) == 3, "logs carried " + Inventories.count(villager.getInventory(), s -> s.is(Items.OAK_LOG)));
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** The door of {@link #shutIn}'s box, in its north wall. */
+    private static final BlockPos DOOR = new BlockPos(10, 1, 8);
+
+    /**
+     * A roofed 5 by 5 cobblestone box from (8, 1, 8) to (12, 3, 12), shut with a closed {@code door} in the middle of
+     * its north wall at {@link #DOOR}, and a villager standing inside it.
+     */
+    private static Villager shutIn(GameTestHelper helper, Block door) {
+        for (int x = 8; x <= 12; x++) {
+            for (int z = 8; z <= 12; z++) {
+                helper.setBlock(x, 4, z, Blocks.COBBLESTONE);
+                if (x == 8 || x == 12 || z == 8 || z == 12) {
+                    for (int y = 1; y <= 3; y++) {
+                        helper.setBlock(x, y, z, Blocks.COBBLESTONE);
+                    }
+                }
+            }
+        }
+        BlockState closed = door.defaultBlockState().setValue(DoorBlock.FACING, Direction.NORTH).setValue(DoorBlock.OPEN, false);
+        helper.setBlock(DOOR, closed.setValue(DoorBlock.HALF, DoubleBlockHalf.LOWER));
+        helper.setBlock(DOOR.above(), closed.setValue(DoorBlock.HALF, DoubleBlockHalf.UPPER));
+        return GameTestSupport.spawnVillager(helper, 10, 1, 10);
+    }
+
+    private static boolean doorOpen(GameTestHelper helper) {
+        BlockState state = helper.getBlockState(DOOR);
+        return state.getBlock() instanceof DoorBlock && state.getValue(DoorBlock.OPEN);
+    }
+
+    /**
+     * A citizen shut in a house walks out through its closed wooden door, and the door is closed again behind it. The
+     * builder of a finished house used to stand at such a door for good: nothing opened it.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_wooden_door", timeoutTicks = 600)
+    public static void moveToLeavesThroughAClosedWoodenDoorAndClosesIt(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = shutIn(helper, Blocks.OAK_DOOR);
+        BlockPos target = helper.absolutePos(new BlockPos(10, 1, 3));
+        ScriptedJob job = new ScriptedJob(new MoveTo(target, 1.5));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        helper.succeedWhen(() -> {
+            helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results + ", villager at "
+                    + StreetTests.relative(helper, villager.blockPosition()).toShortString());
+            helper.assertFalse(doorOpen(helper), "the door was left open");
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /** An iron door is never opened: a citizen shut in behind one stays in, and its move fails. */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_iron_door", timeoutTicks = 600)
+    public static void moveToNeverOpensAnIronDoor(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = shutIn(helper, Blocks.IRON_DOOR);
+        BlockPos target = helper.absolutePos(new BlockPos(10, 1, 3));
+        ScriptedJob job = new ScriptedJob(new MoveTo(target, 1.5));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        helper.onEachTick(() -> {
+            if (doorOpen(helper)) {
+                VillageTestSupport.remove(helper, village);
+                helper.fail("the iron door was opened");
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(job.results.equals(List.of(Task.Status.FAILED)), "results " + job.results);
+            BlockPos at = StreetTests.relative(helper, villager.blockPosition());
+            helper.assertTrue(at.getZ() > DOOR.getZ(), "the villager got out to " + at.toShortString());
             VillageTestSupport.remove(helper, village);
         });
     }

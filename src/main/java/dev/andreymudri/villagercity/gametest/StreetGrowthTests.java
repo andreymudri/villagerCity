@@ -63,7 +63,7 @@ public final class StreetGrowthTests {
     }
 
     /** Fails unless the house touches a street and its floor is at the height of a street it touches. */
-    private static void assertOnAStreet(GameTestHelper helper, VillageData village, BuildingRecord house) {
+    static void assertOnAStreet(GameTestHelper helper, VillageData village, BuildingRecord house) {
         List<StreetCell> touching = PlotPlanner.touchingStreets(village, house.footprint().inflate(PlotRules.MARGIN));
         helper.assertFalse(touching.isEmpty(), "the house at " + StreetTests.relative(helper, house.origin()).toShortString()
                 + " touches no street");
