@@ -131,7 +131,7 @@ public final class VillageCommandTests {
         helper.assertTrue(text.contains("oak_log x5"), "missing storehouse contents:\n" + text);
         helper.assertTrue(text.contains("job=builder") && text.contains("task=idle"), "missing citizen:\n" + text);
         helper.assertTrue(text.contains("paths: 0 cells laid, 0 queued"), "missing paths:\n" + text);
-        helper.assertTrue(text.contains("workshop: table none, furnace none"), "missing workshop:\n" + text);
+        helper.assertTrue(text.lines().anyMatch(line -> line.equals("workshop: table none")), "missing workshop:\n" + text);
         helper.assertTrue(text.contains("dark spots: 0"), "missing dark spots:\n" + text);
         helper.assertTrue(!text.contains("artisan orders:"), "listed artisan orders with none placed:\n" + text);
         VillageTestSupport.remove(helper, village);
@@ -150,9 +150,7 @@ public final class VillageCommandTests {
         village.addPathCell(helper.absolutePos(new BlockPos(21, 2, 24)));
         village.queuePath(helper.absolutePos(new BlockPos(4, 1, 4)));
         BlockPos table = helper.absolutePos(new BlockPos(18, 1, 22));
-        BlockPos furnace = helper.absolutePos(new BlockPos(18, 1, 26));
         village.setCraftingTablePos(table);
-        village.setFurnacePos(furnace);
         village.setDarkSpotCount(7);
         village.setArtisanOrders(List.of("torch x4", "oak_planks x12"));
 
@@ -163,7 +161,8 @@ public final class VillageCommandTests {
         helper.assertTrue(text.lines().anyMatch(line -> line.startsWith("plot " + unpreparedOrigin.toShortString() + " ") && line.endsWith(", unprepared")),
                 "missing unprepared plot:\n" + text);
         helper.assertTrue(text.contains("paths: 2 cells laid, 1 queued"), "missing paths:\n" + text);
-        helper.assertTrue(text.contains("workshop: table " + table.toShortString() + ", furnace " + furnace.toShortString()), "missing workshop:\n" + text);
+        helper.assertTrue(text.lines().anyMatch(line -> line.equals("workshop: table " + table.toShortString())), "missing workshop:\n" + text);
+        helper.assertTrue(!text.contains("furnace"), "the report still names a furnace the village no longer keeps:\n" + text);
         helper.assertTrue(text.contains("dark spots: 7"), "missing dark spots:\n" + text);
         helper.assertTrue(text.contains("artisan orders: torch x4, oak_planks x12"), "missing artisan orders:\n" + text);
         helper.succeed();

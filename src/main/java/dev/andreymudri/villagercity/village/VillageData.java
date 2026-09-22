@@ -44,7 +44,6 @@ public final class VillageData {
     private final Set<Long> pathColumns;
     private final List<BlockPos> pathQueue;
     private @Nullable BlockPos craftingTablePos;
-    private @Nullable BlockPos furnacePos;
     private boolean managed;
     /** Game time before which no builder or storehouse placement searches this village for a spot again; not saved. */
     private long nextPlotSearch;
@@ -82,7 +81,6 @@ public final class VillageData {
         this.pathQueue = new ArrayList<>();
         works.pathQueue().forEach(this::queuePath);
         setCraftingTablePos(works.craftingTable().orElse(null));
-        setFurnacePos(works.furnace().orElse(null));
         this.managed = managed;
     }
 
@@ -253,17 +251,9 @@ public final class VillageData {
         this.craftingTablePos = pos == null ? null : pos.immutable();
     }
 
-    public @Nullable BlockPos furnacePos() {
-        return furnacePos;
-    }
-
-    public void setFurnacePos(@Nullable BlockPos pos) {
-        this.furnacePos = pos == null ? null : pos.immutable();
-    }
-
     /** The saved form of the paths, the path queue and the workshop blocks. */
     public VillageWorks works() {
-        return new VillageWorks(pathCells(), pathQueue(), Optional.ofNullable(craftingTablePos), Optional.ofNullable(furnacePos));
+        return new VillageWorks(pathCells(), pathQueue(), Optional.ofNullable(craftingTablePos));
     }
 
     public int darkSpotCount() {
@@ -372,9 +362,6 @@ public final class VillageData {
         }
         if (craftingTablePos != null) {
             occupied.add(Footprint.of(craftingTablePos, SINGLE_BLOCK));
-        }
-        if (furnacePos != null) {
-            occupied.add(Footprint.of(furnacePos, SINGLE_BLOCK));
         }
         houses.forEach(house -> occupied.add(house.footprint()));
         plots.forEach(plot -> occupied.add(plot.footprint()));

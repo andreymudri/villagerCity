@@ -398,6 +398,8 @@ public final class ArtisanTests {
 
         helper.assertTrue(decoded.craftingTable().isPresent(),
                 "a works tag with a furnace position in it lost the rest of itself: " + decoded);
+        CompoundTag saved = (CompoundTag) VillageWorks.CODEC.encodeStart(NbtOps.INSTANCE, decoded).getOrThrow();
+        helper.assertTrue(!saved.contains("furnace"), "the old furnace position was carried into the next save: " + saved);
         helper.succeed();
     }
 
@@ -441,7 +443,6 @@ public final class ArtisanTests {
         rule.set(false, helper.getLevel().getServer());
         WorkshopService.ensureWorkshop(helper.getLevel(), village);
         BlockPos table = village.craftingTablePos();
-        BlockPos furnace = village.furnacePos();
         int placed = 0;
         for (int dx = -WorkshopService.SEARCH_RADIUS; dx <= WorkshopService.SEARCH_RADIUS; dx++) {
             for (int dz = -WorkshopService.SEARCH_RADIUS; dz <= WorkshopService.SEARCH_RADIUS; dz++) {
@@ -454,7 +455,7 @@ public final class ArtisanTests {
         rule.set(previous, helper.getLevel().getServer());
         VillageTestSupport.remove(helper, village);
 
-        helper.assertTrue(table == null && furnace == null, "recorded a workshop with mob griefing off: table " + table + ", furnace " + furnace);
+        helper.assertTrue(table == null, "recorded a workshop with mob griefing off: table " + table);
         helper.assertTrue(placed == 0, placed + " workshop blocks placed with mob griefing off");
         helper.succeed();
     }
@@ -466,18 +467,15 @@ public final class ArtisanTests {
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
         BuilderTests.stockedStorehouse(helper, village, Map.of());
         BlockPos table;
-        BlockPos furnace;
         cancelAllPlacements = true;
         try {
             WorkshopService.ensureWorkshop(helper.getLevel(), village);
             table = village.craftingTablePos();
-            furnace = village.furnacePos();
         } finally {
             cancelAllPlacements = false;
             VillageTestSupport.remove(helper, village);
         }
-        helper.assertTrue(table == null && furnace == null,
-                "workshop recorded although placement was cancelled: table " + table + ", furnace " + furnace);
+        helper.assertTrue(table == null, "workshop recorded although placement was cancelled: table " + table);
         for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
             for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
                 for (int y = 1; y <= 3; y++) {

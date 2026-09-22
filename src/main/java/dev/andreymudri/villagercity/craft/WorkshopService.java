@@ -22,7 +22,7 @@ import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.common.util.BlockSnapshot;
 
 /**
- * Keeps the artisan's workshop, a crafting table and a furnace, in place for the village: both stand within
+ * Keeps the artisan's workshop, a crafting table, in place for the village: it stands within
  * {@link #SEARCH_RADIUS} blocks of the storehouse so one plan can walk store, workshop and store again. A block that
  * goes missing is forgotten and placed again at the first free spot, which may differ from the old one.
  */
