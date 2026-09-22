@@ -483,9 +483,10 @@ This task fixes every shared interface the later tasks build on. Its stubs must 
 
 - [ ] **Step 1: README.**
   - Describe the artisan, paver and lamplighter under "What works today", with the hiring order.
-  - Update play-testing step 5: logs, cobblestone, sand, wool, dye and coal are enough, and the house needs a torch.
+  - Update play-testing step 5: logs, cobblestone, glass, wool, dye and coal are enough, and the house needs a torch. The
+    village does not smelt (Task 7, Step 8), so the glass comes from the player's own furnace, not as sand.
   - Add the new known issues that the spec's Out of Scope list implies.
-- [ ] **Step 2: `VillageWorksEndToEndTests.aHillVillageGrowsOnItsOwn`.** A managed village on a 3-terrace slope with 5 unemployed villagers and a storehouse stocked with raw materials.
+- [ ] **Step 2: `VillageWorksEndToEndTests.aHillVillageGrowsOnItsOwn`.** A managed village on a 3-terrace slope with 5 unemployed villagers and a storehouse stocked with what a player supplies: logs, cobblestone, glass (not sand: the village does not smelt), wool, dye and coal.
   - Succeed when there is one house, its plot was prepared by the paver, a path cell exists, and no dark spawnable column remains within radius 12.
   - Timeout 36000. Use its own batch.
 - [ ] **Step 3: verify and commit.** Build, GameTests and structures green. Commit: `docs: README covers the artisan, paver and lamplighter; test a hill village growing on its own`.
