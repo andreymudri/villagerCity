@@ -83,6 +83,9 @@ only for costing the paver more than it can move.
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/PathWork.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/PathRoute.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/gametest/PathTests.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageData.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/gametest/VillageRegistryTests.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/gametest/VillageWorksEndToEndTests.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/StreetTests.java`
 
 **Depends:** T1
@@ -112,6 +115,11 @@ only for costing the paver more than it can move.
       and the no-route backoff. Delete the tests of deleted behaviour. Keep, pointed at the helpers `StreetWork` now
       uses, every test of how a cell is built: headroom cutting, support fill, plank bridges, `MakePath` surfacing,
       and `WorldPermissions` refusals. Say in the commit which tests went and why.
+- [ ] **Step 5b (amended 2026-09-22):** `VillageData.addHouse` stops queueing a path. Update the
+      `VillageRegistryTests` assertion that pinned the queueing so it pins the opposite: a finished house queues
+      nothing. In `VillageWorksEndToEndTests.aHillVillageGrowsOnItsOwn`, remove the "a path was laid from the house to
+      the bell" assertion. No street is laid until T4 wires `StreetWork` into `PaverJob`, and T5 replaces the assertion
+      with a street one. Keep every other assertion of that test.
 - [ ] **Step 6:** Tests in `StreetTests`: a run climbs a 5-block slope one block per cell; a run stops at the reach
       limit; a run never crosses a house footprint; growth stops at 6 hops; a second run starts from the end the first
       one left; no door is ever opened; every laid centre cell has both side cells laid at its own height and recorded
@@ -167,6 +175,7 @@ only for costing the paver more than it can move.
 
 **Files:**
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/PaverJob.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/job/StreetWork.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/job/BuilderJob.java`
 - Modify: `src/main/java/dev/andreymudri/villagercity/village/VillageTicker.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/StreetGrowthTests.java`
@@ -199,6 +208,7 @@ only for costing the paver more than it can move.
       budget 80, column step 6, houses at least 5 apart, one pad in eight skipped) and what `/villagercity village` now
       prints.
 - [ ] **Step 2:** An end-to-end GameTest on a slope: a village with a storehouse, a paver, a builder and a lamplighter
-      lays 3-wide streets, builds two houses on them at the streets' own heights and at least 5 blocks apart, and lights
+      lays 3-wide streets (restore a street assertion in `aHillVillageGrowsOnItsOwn`, which T2 had to drop), builds two
+      houses on them at the streets' own heights and at least 5 blocks apart, and lights
       the ground, with no wrong blocks and no village state left behind. It runs with `skyAccess = true`: under the
       barrier ceiling every column reads as lit.
