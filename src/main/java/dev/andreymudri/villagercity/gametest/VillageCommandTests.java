@@ -275,9 +275,10 @@ public final class VillageCommandTests {
 
             int expectedOriginX = center.getX() - blueprint.size().getX() / 2;
             int expectedOriginZ = center.getZ() - blueprint.size().getZ() / 2;
-            Optional<PlotPlanner.Site> planned = PlotPlanner.findSite(helper.getLevel(), village, blueprint.size(), false, pos -> true, noSkip);
-            helper.assertTrue(planned.stream().noneMatch(site -> site.origin().getX() == expectedOriginX && site.origin().getZ() == expectedOriginZ),
-                    "the planner offered the origin the diagnosis called buildable: " + planned);
+            // Only this origin is allowed, so the planner must refuse the very pad the diagnosis refused.
+            Optional<PlotPlanner.Site> planned = PlotPlanner.findSite(helper.getLevel(), village, blueprint.size(), false,
+                    pos -> pos.getX() == expectedOriginX && pos.getZ() == expectedOriginZ, noSkip);
+            helper.assertTrue(planned.isEmpty(), "the planner offered the pad the diagnosis refused: " + planned);
         } finally {
             VillageTestSupport.remove(helper, village);
         }
