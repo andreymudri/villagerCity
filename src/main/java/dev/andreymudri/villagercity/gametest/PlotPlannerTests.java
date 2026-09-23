@@ -30,6 +30,13 @@ public final class PlotPlannerTests {
     private static final PlotRules.LotSkip NO_LOT_SKIPPED = (lotX, lotZ) -> false;
     /** Most passes over its columns a failed search may cost ({@link #aFailedSearchOfALargeVillageIsCheap}). */
     private static final long MAX_FAILED_SEARCH_PASSES = 8;
+    /** A radius whose search reach, 22, keeps every pad and its margin inside the 48-wide test area around (24, 24). */
+    private static final int INSIDE_RADIUS = 6;
+    /**
+     * Most block states a failed search of an {@link #INSIDE_RADIUS} village may read. It read 11871 when this was
+     * written; the bound leaves room for about a third more.
+     */
+    private static final long MAX_FAILED_SEARCH_READS = 16_000;
 
     /**
      * Test-relative position. Not {@code helper.relativePos}: in 1.21.1 it rotates by
@@ -149,9 +156,13 @@ public final class PlotPlannerTests {
     }
 
     /**
-     * A failed search of a large village costs a few passes over the columns within its reach, each sampled once
-     * ({@link PlotPlanner#sample}). It is timed against such a pass, measured in the same runs, in the CPU time of the
-     * server thread rather than by the clock, so time the thread spends waiting for a busy machine counts for neither.
+     * A failed search is cheap, checked twice. First its work is counted: the block states {@link PlotPlanner#sample}
+     * reads in a failed search of a village whose reach and margin stay inside the test area, so every column read is
+     * one this test laid and the count is the same wherever the area stands; it is bounded by
+     * {@link #MAX_FAILED_SEARCH_READS}, which reading a column more than once, or reading more of each, exceeds. Then
+     * a failed search of a large village, whose reach runs past the area, is timed against one pass sampling every
+     * column within its reach, measured in the same runs in the server thread's CPU time, which time spent waiting
+     * for a busy machine does not add to; that catches work outside {@link PlotPlanner#sample}.
      */
     @GameTest(template = GameTestSupport.TEST_AREA)
     public static void aFailedSearchOfALargeVillageIsCheap(GameTestHelper helper) {
@@ -163,8 +174,16 @@ public final class PlotPlannerTests {
                 }
             }
         }
-        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(24, 1, 24)), 160);
-        BlockPos center = village.center();
+        BlockPos center = helper.absolutePos(new BlockPos(24, 1, 24));
+        VillageData inside = new VillageData(UUID.randomUUID(), center, INSIDE_RADIUS);
+        long before = PlotPlanner.blockReads();
+        // Every buildable spot is refused, so the whole reach is searched, as when nothing is buildable.
+        boolean foundInside = PlotPlanner.find(helper.getLevel(), inside, HOUSE, origin -> false).isPresent();
+        long reads = PlotPlanner.blockReads() - before;
+        helper.assertTrue(!foundInside, "a refused spot was returned inside the area");
+        helper.assertTrue(reads <= MAX_FAILED_SEARCH_READS, "a failed search read " + reads + " block states, more than " + MAX_FAILED_SEARCH_READS);
+
+        VillageData village = new VillageData(UUID.randomUUID(), center, 160);
         int reach = PlotPlanner.searchReach(village);
         int window = PlotPlanner.verticalReach(village.radius());
         ThreadMXBean threads = ManagementFactory.getThreadMXBean();
@@ -175,7 +194,6 @@ public final class PlotPlannerTests {
         boolean found = false;
         for (int run = 0; run < 5; run++) {
             long started = clock.getAsLong();
-            // Every buildable spot is refused, so the whole reach is searched, as when nothing is buildable.
             found |= PlotPlanner.find(helper.getLevel(), village, HOUSE, origin -> false).isPresent();
             search = Math.min(search, clock.getAsLong() - started);
             started = clock.getAsLong();

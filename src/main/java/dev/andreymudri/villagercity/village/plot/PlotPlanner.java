@@ -40,8 +40,19 @@ public final class PlotPlanner {
     public static final int MAX_VERTICAL = 48;
     /** Farthest a spot's center may lie from the bell (Chebyshev), however large the village grows. */
     public static final int MAX_REACH = 48;
+    /** Block states {@link #sample} has read since the server started: a count of work, not saved, never reset. */
+    private static long blockReads;
 
     private PlotPlanner() {
+    }
+
+    /**
+     * How many block states {@link #sample} has read so far. A test reads it before and after a search on the server
+     * thread and bounds the difference: the work the search did, which unlike its time does not grow with the machine's
+     * load.
+     */
+    public static long blockReads() {
+        return blockReads;
     }
 
     /**
@@ -531,6 +542,7 @@ public final class PlotPlanner {
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos(x, 0, z);
         for (int y = surface; y >= referenceY - verticalReach; y--) {
             BlockState state = level.getBlockState(pos.setY(y));
+            blockReads++;
             if (y > referenceY + verticalReach) {
                 if (state.blocksMotion() && !state.is(BlockTags.LEAVES) && !state.is(Blocks.BARRIER)) {
                     return Column.MISSING;
