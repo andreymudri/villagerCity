@@ -15,12 +15,10 @@ import net.minecraft.core.Vec3i;
 import net.minecraft.server.level.ServerLevel;
 
 /**
- * Explains, for one spot, why the plot search would take it or turn it down. Every rule it reports, but one, is the
- * same one {@link PlotPlanner#findSite} applies, through the same methods, with a paver's earth budget exactly when
- * the village has a paver, as the builder searches; {@code VillageCommandTests} pins the two to the same verdict, so
- * a change to the planner that this misses fails that test rather than quietly lying to whoever asked. The one rule
- * missing is the slice straight ahead of a street end ({@link PlotPlanner}'s own {@code slicesAhead}, private to it):
- * a pad there can still be called buildable here while the real search would never offer it.
+ * Explains, for one spot, why the plot search would take it or turn it down. Every rule it reports is the same one
+ * {@link PlotPlanner#findSite} applies, through the same methods, with a paver's earth budget exactly when the village
+ * has a paver, as the builder searches; {@code VillageCommandTests} pins the two to the same verdict, so a change to
+ * the planner that this misses fails that test rather than quietly lying to whoever asked.
  */
 public final class PlotDiagnostics {
     private PlotDiagnostics() {
@@ -75,6 +73,10 @@ public final class PlotDiagnostics {
                 int away = Math.max(Math.abs(nearest.pos().getX() - center.getX()), Math.abs(nearest.pos().getZ() - center.getZ()));
                 lines.add("NO  street: the spot touches no street; the nearest street cell is " + away + " blocks away, "
                         + nearest.hops() + " hops out");
+                ok = false;
+            }
+            if (PlotRules.overlapsAny(footprint, PlotPlanner.slicesAhead(village))) {
+                lines.add("NO  ahead: this footprint lies in the slice straight ahead of a street end, where the next run would start");
                 ok = false;
             }
         }

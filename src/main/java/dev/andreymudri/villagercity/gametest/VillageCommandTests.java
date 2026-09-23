@@ -251,6 +251,39 @@ public final class VillageCommandTests {
         helper.succeed();
     }
 
+    /**
+     * A pad in the slice straight ahead of a street's only end would cap the street for good ({@link PlotPlanner#slicesAhead}),
+     * so the real search never offers it. {@code explain} must say so too, not call the spot buildable.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_why_ahead")
+    public static void whyReportsAPadInTheSliceAheadOfAStreetEnd(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 8, false);
+        try {
+            // Laid from x=38 down to x=10: every cell but the last grew a later neighbour, so x=10 is the graph's only
+            // end, and its slice ahead (away from the parent at x=11) is x=9, z 29..31.
+            for (int x = 38; x >= 10; x--) {
+                village.addStreetCell(helper.absolutePos(new BlockPos(x, 1, 30)), 2);
+            }
+            Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+            BlockPos center = helper.absolutePos(new BlockPos(8, 1, 26));
+            PlotRules.LotSkip noSkip = (x, z) -> false;
+
+            String text = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), noSkip));
+            helper.assertTrue(text.contains("NO  ahead"), "a pad in the slice ahead of a street end is not reported:\n" + text);
+            helper.assertFalse(text.startsWith("This spot is buildable."), "a pad in the slice ahead of a street end is accepted:\n" + text);
+
+            int expectedOriginX = center.getX() - blueprint.size().getX() / 2;
+            int expectedOriginZ = center.getZ() - blueprint.size().getZ() / 2;
+            Optional<PlotPlanner.Site> planned = PlotPlanner.findSite(helper.getLevel(), village, blueprint.size(), false, pos -> true, noSkip);
+            helper.assertTrue(planned.stream().noneMatch(site -> site.origin().getX() == expectedOriginX && site.origin().getZ() == expectedOriginZ),
+                    "the planner offered the origin the diagnosis called buildable: " + planned);
+        } finally {
+            VillageTestSupport.remove(helper, village);
+        }
+        helper.succeed();
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_outline")
     public static void showDrawsTheVillageUntilItIsHidden(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
