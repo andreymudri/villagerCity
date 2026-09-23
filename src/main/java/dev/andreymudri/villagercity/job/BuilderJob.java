@@ -3,6 +3,7 @@ package dev.andreymudri.villagercity.job;
 import dev.andreymudri.villagercity.blueprint.Blueprint;
 import dev.andreymudri.villagercity.blueprint.BlueprintPlacement;
 import dev.andreymudri.villagercity.blueprint.Blueprints;
+import dev.andreymudri.villagercity.citizen.CitizenAttachments;
 import dev.andreymudri.villagercity.citizen.Inventories;
 import dev.andreymudri.villagercity.citizen.Job;
 import dev.andreymudri.villagercity.citizen.JobType;
@@ -50,8 +51,9 @@ import net.minecraft.world.phys.Vec3;
  * Takes over a released plot once its retry time has passed, or else claims a new plot once the storehouse holds a
  * full blueprint's materials. In a village with a paver the new plot must open onto a street ({@link PlotPlanner}
  * chooses it), so until the paver has laid one the builder waits for {@code "a street to build on"}. A village with no
- * paver, or whose paver cannot start a street at the bell at all ({@link StreetWork#nextRun} is empty on an empty
- * graph), builds where it can without streets rather than waiting forever. A plot needing earthwork is only claimed while the village has a paver,
+ * paver, or whose pavers cannot start a street at the bell at all ({@link StreetWork#nextRun} is empty on an empty
+ * graph, counting the columns each paver has given up on), builds where it can without streets rather than waiting
+ * forever. A plot needing earthwork is only claimed while the village has a paver,
  * and the builder waits until the paver has prepared it, handing a plot that stays unprepared back after
  * {@link #PREPARATION_WAIT_TICKS} of working time. Then it withdraws what is missing, and clears and places blocks in
  * build order. Progress lives in the world and the plot record, so a reloaded or replacement builder resumes by
@@ -343,7 +345,7 @@ public final class BuilderJob implements Job {
         // A village with a paver builds only beside its streets, which the paver grows while nothing is buildable. When
         // no street can leave the bell at all, waiting would wedge the village: it builds without streets instead.
         boolean paver = village.jobCount(JobType.PAVER) > 0;
-        boolean streetBound = paver && (!village.streets().isEmpty() || StreetWork.nextRun(level, village).isPresent());
+        boolean streetBound = paver && (!village.streets().isEmpty() || aPaverCanStartAStreet(level, village));
         String noPlot = streetBound ? "a street to build on" : "a buildable plot near the bell";
         if (streetBound && village.streets().isEmpty()) {
             waitingFor = noPlot;
@@ -368,5 +370,24 @@ public final class BuilderJob implements Job {
         village.addPlot(plot);
         VillageRegistry.get(level).setDirty();
         return Optional.of(plot);
+    }
+
+    /**
+     * Whether some paver on the roster can start a street on the empty graph: {@link StreetWork#nextRun} with the columns
+     * that paver has given up on ({@link PaverJob#refusedColumns}). A paver that is not loaded, or not running a
+     * {@link PaverJob}, has given up on nothing, as a fresh job after a reload has not.
+     */
+    private static boolean aPaverCanStartAStreet(ServerLevel level, VillageData village) {
+        for (Map.Entry<UUID, JobType> citizen : village.citizens().entrySet()) {
+            if (citizen.getValue() != JobType.PAVER) {
+                continue;
+            }
+            Set<Long> refused = level.getEntity(citizen.getKey()) instanceof Villager villager
+                    && villager.getData(CitizenAttachments.RUNTIME).activeJob() instanceof PaverJob paver ? paver.refusedColumns() : Set.of();
+            if (StreetWork.nextRun(level, village, refused).isPresent()) {
+                return true;
+            }
+        }
+        return false;
     }
 }
