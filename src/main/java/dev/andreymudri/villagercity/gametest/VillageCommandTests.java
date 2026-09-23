@@ -92,7 +92,9 @@ public final class VillageCommandTests {
             helper.assertTrue(why.contains("NO  earthwork: levelling to y" + helper.absolutePos(new BlockPos(0, 5, 0)).getY() + " moves 84 blocks, the budget is "
                     + Earthwork.MAX_VOLUME + " for the paver"), "the budget it broke is not named:\n" + why);
             helper.assertTrue(why.contains("yes column step"), "the column step within its limit is not reported as met:\n" + why);
-            helper.assertTrue(lines.stream().filter(line -> line.startsWith("NO  ")).count() == 1, "a rule other than the budget turned it down:\n" + why);
+            // With a paver and no street, the builder would also wait for the first street; that line is not the spot's fault.
+            helper.assertTrue(lines.stream().filter(line -> line.startsWith("NO  ") && !line.startsWith("NO  street: the village has a paver")).count() == 1,
+                    "a rule other than the budget turned it down:\n" + why);
             // The planner agrees: it never takes that spot.
             BlockPos corner = helper.absolutePos(spot.offset(-blueprint.size().getX() / 2, 0, -blueprint.size().getZ() / 2));
             List<BlockPos> offered = new ArrayList<>();
@@ -245,6 +247,35 @@ public final class VillageCommandTests {
             Optional<PlotPlanner.Site> planned = PlotPlanner.findSite(helper.getLevel(), village, blueprint.size(), true, pos -> true, noSkip);
             helper.assertTrue(planned.isEmpty(), "the planner offered " + planned.map(site -> site.origin().toShortString()).orElse("nothing")
                     + " despite the torch, but the diagnosis called a pad there buildable");
+        } finally {
+            VillageTestSupport.remove(helper, village);
+        }
+        helper.succeed();
+    }
+
+    /**
+     * A builder in a village with a paver and no street yet claims nothing: it waits for the paver's first street
+     * ({@link BuilderJob#waitsForFirstStreet}). {@code explain} must say so too, not call a flat spot by the bell
+     * buildable; without the paver the same spot is buildable, so nothing else about it is wrong.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_why_first_street")
+    public static void whyReportsThatABuilderWaitsForThePaversFirstStreet(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 8, false);
+        try {
+            Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+            BlockPos center = helper.absolutePos(new BlockPos(14, 1, 14));
+            PlotRules.LotSkip noSkip = (x, z) -> false;
+
+            String alone = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), noSkip));
+            helper.assertTrue(alone.startsWith("This spot is buildable."), "the spot is not buildable even without a paver:\n" + alone);
+
+            village.setCitizen(UUID.randomUUID(), JobType.PAVER);
+            helper.assertTrue(BuilderJob.waitsForFirstStreet(helper.getLevel(), village), "the builder would not wait for a first street");
+            String text = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), noSkip));
+            helper.assertTrue(text.contains("NO  street: the village has a paver and no street yet"),
+                    "a spot the waiting builder would not claim is not reported:\n" + text);
+            helper.assertFalse(text.startsWith("This spot is buildable."), "a spot the waiting builder would not claim is accepted:\n" + text);
         } finally {
             VillageTestSupport.remove(helper, village);
         }

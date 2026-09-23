@@ -345,9 +345,10 @@ public final class BuilderJob implements Job {
         // A village with a paver builds only beside its streets, which the paver grows while nothing is buildable. When
         // no street can leave the bell at all, waiting would wedge the village: it builds without streets instead.
         boolean paver = village.jobCount(JobType.PAVER) > 0;
-        boolean streetBound = paver && (!village.streets().isEmpty() || aPaverCanStartAStreet(level, village));
+        boolean waitForStreet = waitsForFirstStreet(level, village);
+        boolean streetBound = waitForStreet || (paver && !village.streets().isEmpty());
         String noPlot = streetBound ? "a street to build on" : "a buildable plot near the bell";
-        if (streetBound && village.streets().isEmpty()) {
+        if (waitForStreet) {
             waitingFor = noPlot;
             return Optional.empty();
         }
@@ -370,6 +371,15 @@ public final class BuilderJob implements Job {
         village.addPlot(plot);
         VillageRegistry.get(level).setDirty();
         return Optional.of(plot);
+    }
+
+    /**
+     * Whether a builder in this village claims nothing yet and waits for the paver's first street: the village has a
+     * paver, no street, and a street that can still leave the bell ({@link #aPaverCanStartAStreet}). The plot command
+     * asks the same question, so it never calls a spot buildable that the builder would not claim.
+     */
+    public static boolean waitsForFirstStreet(ServerLevel level, VillageData village) {
+        return village.jobCount(JobType.PAVER) > 0 && village.streets().isEmpty() && aPaverCanStartAStreet(level, village);
     }
 
     /**

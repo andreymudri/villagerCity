@@ -1,6 +1,7 @@
 package dev.andreymudri.villagercity.command;
 
 import dev.andreymudri.villagercity.citizen.JobType;
+import dev.andreymudri.villagercity.job.BuilderJob;
 import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
@@ -65,7 +66,12 @@ public final class PlotDiagnostics {
 
         List<StreetCell> touching = List.of();
         if (village.streets().isEmpty()) {
-            lines.add("    the village has no streets yet, so the spot is levelled on its own ground");
+            if (BuilderJob.waitsForFirstStreet(level, village)) {
+                lines.add("NO  street: the village has a paver and no street yet, so the builder waits for the paver's first street");
+                ok = false;
+            } else {
+                lines.add("    the village has no streets yet, so the spot is levelled on its own ground");
+            }
         } else {
             touching = PlotPlanner.touchingStreets(village, area);
             if (touching.isEmpty()) {
