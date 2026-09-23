@@ -16,6 +16,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.tags.ItemTags;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
@@ -162,6 +163,63 @@ public final class MovementTests {
     }
 
     /**
+     * A door is closed once the citizen is more than {@link MoveTo#DOOR_REACH} past it, while the move to a far
+     * target is still running: closing a door is not something the move only does once it stops or succeeds.
+     * Before the fix: deleting the mid-move close from {@code MoveTo.tick} leaves the door open for the rest of a
+     * long walk, since it is far from the target and the task keeps running.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_door_passed", timeoutTicks = 900)
+    public static void aDoorIsClosedOncePassedWhileTheMoveKeepsRunning(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, false);
+        Villager villager = shutIn(helper, Blocks.OAK_DOOR);
+        BlockPos target = helper.absolutePos(new BlockPos(44, 1, 4));
+        ScriptedJob job = new ScriptedJob(new MoveTo(target, 1.5));
+        CitizenTestSupport.enroll(villager, village, JobType.BUILDER, ItemStack.EMPTY, job);
+        BlockPos doorAt = helper.absolutePos(DOOR);
+        AtomicLong past = new AtomicLong(-1);
+        helper.onEachTick(() -> {
+            if (past.get() >= 0) {
+                return;
+            }
+            double distanceSqr = villager.position().distanceToSqr(Vec3.atBottomCenterOf(doorAt));
+            if (distanceSqr > MoveTo.DOOR_REACH * MoveTo.DOOR_REACH) {
+                past.set(helper.getTick());
+                if (doorOpen(helper)) {
+                    VillageTestSupport.remove(helper, village);
+                    helper.fail("the door was still open once the citizen was past it, with the move still running "
+                            + "(results " + job.results + ")");
+                }
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(past.get() >= 0, "the citizen never got past the door");
+            helper.assertTrue(job.results.equals(List.of(Task.Status.SUCCESS)), "results " + job.results);
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /**
+     * {@link MoveTo#mayOpen} allows only a closed door in {@link net.minecraft.tags.BlockTags#WOODEN_DOORS}: an oak
+     * door closed, never an iron or a copper door (neither is wooden), and never an oak door already open.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void mayOpenAllowsOnlyAClosedWoodenDoor(GameTestHelper helper) {
+        BlockPos oak = new BlockPos(2, 1, 20);
+        BlockPos iron = new BlockPos(4, 1, 20);
+        BlockPos copper = new BlockPos(6, 1, 20);
+        helper.setBlock(oak, Blocks.OAK_DOOR.defaultBlockState().setValue(DoorBlock.OPEN, false));
+        helper.setBlock(iron, Blocks.IRON_DOOR.defaultBlockState().setValue(DoorBlock.OPEN, false));
+        helper.setBlock(copper, Blocks.COPPER_DOOR.defaultBlockState().setValue(DoorBlock.OPEN, false));
+        helper.assertTrue(MoveTo.mayOpen(helper.getBlockState(oak)), "a closed oak door may not be opened");
+        helper.assertFalse(MoveTo.mayOpen(helper.getBlockState(iron)), "a closed iron door may be opened");
+        helper.assertFalse(MoveTo.mayOpen(helper.getBlockState(copper)), "a closed copper door may be opened");
+        helper.setBlock(oak, Blocks.OAK_DOOR.defaultBlockState().setValue(DoorBlock.OPEN, true));
+        helper.assertFalse(MoveTo.mayOpen(helper.getBlockState(oak)), "an already open oak door may be opened again");
+        helper.succeed();
+    }
+
+    /**
      * A shut-in villager walking out of its box through the oak door, with the job that runs the move. The move is the
      * first step of a {@link TaskSequence}, as in the jobs that walk somewhere to work.
      */
@@ -264,6 +322,30 @@ public final class MovementTests {
             helper.assertTrue(killed.get() >= 0, "the door never opened");
             helper.assertTrue(walkout.villager().isRemoved(), "the villager is not removed yet");
             helper.assertFalse(doorOpen(helper), "the door a killed citizen opened is still open");
+            VillageTestSupport.remove(helper, walkout.village());
+        });
+    }
+
+    /**
+     * The villager is removed with {@code RemovalReason.UNLOADED_TO_CHUNK} the tick the door opens, standing in for
+     * its chunk unloading: the door it opened is closed all the same. Before the fix: limiting
+     * {@code CitizenRoster.onLeave}'s stop of the current task to removal reasons where {@code shouldDestroy()} is
+     * true skips this reason, and the door is left open.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_move_door_unload", timeoutTicks = 400)
+    public static void aDoorOpenedByAnUnloadedCitizenIsClosed(GameTestHelper helper) {
+        Walkout walkout = walkout(helper);
+        AtomicLong unloaded = new AtomicLong(-1);
+        helper.onEachTick(() -> {
+            if (unloaded.get() < 0 && doorOpen(helper)) {
+                walkout.villager().remove(Entity.RemovalReason.UNLOADED_TO_CHUNK);
+                unloaded.set(helper.getTick());
+            }
+        });
+        helper.succeedWhen(() -> {
+            helper.assertTrue(unloaded.get() >= 0, "the door never opened");
+            helper.assertTrue(walkout.villager().isRemoved(), "the villager is not removed yet");
+            helper.assertFalse(doorOpen(helper), "the door an unloaded citizen opened is still open");
             VillageTestSupport.remove(helper, walkout.village());
         });
     }
