@@ -16,9 +16,11 @@ import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.plot.Earthwork;
 import dev.andreymudri.villagercity.village.plot.PlotPlanner;
+import dev.andreymudri.villagercity.village.plot.PlotRules;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.BlockPos;
@@ -119,6 +121,163 @@ public final class VillageCommandTests {
             helper.assertTrue(beside.contains("(the street's height, 2 hops out)"), "the street beside the spot is not reported:\n" + beside);
             helper.assertTrue(away.contains("NO  street: the spot touches no street; the nearest street cell is 18 blocks away, 2 hops out"),
                     "a spot away from the street was not turned down for it:\n" + away);
+        } finally {
+            VillageTestSupport.remove(helper, village);
+        }
+        helper.succeed();
+    }
+
+    /**
+     * The lot the pad's own footprint lies in is forced skipped and, separately, forced not skipped; the real hash
+     * ({@link PlotRules#skippedLot}) never runs, so the outcome does not depend on where the framework places the
+     * structure.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_why_skip")
+    public static void whyReportsAPadOverALotTheSkipLeavesEmpty(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 8, false);
+        try {
+            Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+            for (int x = 10; x <= 38; x++) {
+                village.addStreetCell(helper.absolutePos(new BlockPos(x, 1, 30)), 2);
+            }
+            // Same spot as whyReportsTheStreetASpotOpensOnto: centre (16, 26), footprint z 24..28, beside the street.
+            BlockPos center = helper.absolutePos(new BlockPos(16, 1, 26));
+            int padMinX = center.getX() - blueprint.size().getX() / 2;
+            int padMinZ = center.getZ() - blueprint.size().getZ() / 2;
+            int lotX = PlotRules.lotOf(padMinX);
+            int lotZ = PlotRules.lotOf(padMinZ);
+            PlotRules.LotSkip forcedSkip = (x, z) -> x == lotX && z == lotZ;
+            PlotRules.LotSkip noSkip = (x, z) -> false;
+
+            String skipped = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), forcedSkip));
+            String open = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), noSkip));
+
+            helper.assertTrue(skipped.contains("NO  skipped: one lot in " + PlotRules.SKIP_ONE_IN + " beside a street is left empty, and this footprint covers one"),
+                    "a pad over a lot the skip leaves empty is not reported skipped:\n" + skipped);
+            helper.assertFalse(skipped.startsWith("This spot is buildable."), "a pad over a lot the skip leaves empty is accepted:\n" + skipped);
+            helper.assertTrue(open.startsWith("This spot is buildable."), "the same pad is rejected when no lot is left empty:\n" + open);
+            helper.assertFalse(open.contains("skipped"), "a pad over no lot the skip leaves empty is reported skipped:\n" + open);
+        } finally {
+            VillageTestSupport.remove(helper, village);
+        }
+        helper.succeed();
+    }
+
+    /**
+     * The forced skip covers only the lot the pad's far edge reaches into, never the lot its origin corner sits in:
+     * {@link PlotRules#coversSkippedLot} must still catch it. A rule that instead hashed the origin's own lot (what
+     * {@code explain} did before this footprint check landed) would call this pad buildable.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_why_skip_far_edge")
+    public static void whyReportsAPadWhoseFarEdgeReachesIntoASkippedLot(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 8, false);
+        try {
+            Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+            for (int x = 10; x <= 38; x++) {
+                village.addStreetCell(helper.absolutePos(new BlockPos(x, 1, 30)), 2);
+            }
+            // Beside the same street as whyReportsAPadOverALotTheSkipLeavesEmpty, but scanned along x for a pad
+            // whose 5-wide footprint straddles a lot boundary: its origin lies in one lot, its far edge in the next.
+            BlockPos center = null;
+            PlotRules.LotSkip farEdgeOnly = null;
+            for (int relX = 12; relX <= 36 && center == null; relX++) {
+                BlockPos candidate = helper.absolutePos(new BlockPos(relX, 1, 26));
+                int candidateMinX = candidate.getX() - blueprint.size().getX() / 2;
+                int candidateMinZ = candidate.getZ() - blueprint.size().getZ() / 2;
+                int candidateMaxX = candidateMinX + blueprint.size().getX() - 1;
+                int originLotX = PlotRules.lotOf(candidateMinX);
+                int farLotX = PlotRules.lotOf(candidateMaxX);
+                if (originLotX != farLotX) {
+                    center = candidate;
+                    int lotZ = PlotRules.lotOf(candidateMinZ);
+                    farEdgeOnly = (x, z) -> x == farLotX && z == lotZ;
+                }
+            }
+            helper.assertTrue(center != null, "no pad beside the street has a footprint crossing a lot line; widen the scan");
+
+            String text = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), farEdgeOnly));
+            helper.assertTrue(text.contains("NO  skipped: one lot in " + PlotRules.SKIP_ONE_IN + " beside a street is left empty, and this footprint covers one"),
+                    "a pad whose far edge reaches a skipped lot, but whose origin does not sit in it, is not reported skipped:\n" + text);
+            helper.assertFalse(text.startsWith("This spot is buildable."), "a pad reaching into a skipped lot on its far edge is accepted:\n" + text);
+        } finally {
+            VillageTestSupport.remove(helper, village);
+        }
+        helper.succeed();
+    }
+
+    /**
+     * A torch where the pad's fill would go is not ground the paver may clear ({@link PlotPlanner#fillObstructed}),
+     * so the real search never offers the pad ({@code PlotPlannerTests#aPadWhoseFillATorchBlocksIsNotPlanned} pins
+     * that). {@code explain} must say so too, not call the spot buildable.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_why_fill_obstructed")
+    public static void whyReportsAPadWhoseFillATorchBlocks(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        // A street one block above flat ground, so the pad beside it needs a one-block fill; cobblestone everywhere
+        // but the flat patch keeps the rest of the area from offering an easier, unraised pad.
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if (x < 26 || x > 32 || z < 14 || z > 24) {
+                    helper.setBlock(x, 0, z, Blocks.COBBLESTONE);
+                }
+            }
+        }
+        helper.setBlock(29, 1, 20, Blocks.TORCH);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 4, false);
+        try {
+            village.setCitizen(UUID.randomUUID(), JobType.PAVER);
+            for (int z = 23; z >= 16; z--) {
+                village.addStreetCell(helper.absolutePos(new BlockPos(24, 2, z)), 1);
+                village.addPathCell(helper.absolutePos(new BlockPos(23, 2, z)));
+                village.addPathCell(helper.absolutePos(new BlockPos(25, 2, z)));
+            }
+            Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+            // Origin (27, 17): the pad the planner offers along this street when nothing blocks its fill.
+            BlockPos center = helper.absolutePos(new BlockPos(27 + blueprint.size().getX() / 2, 1, 17 + blueprint.size().getZ() / 2));
+            PlotRules.LotSkip noSkip = (x, z) -> false;
+
+            String text = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), noSkip));
+            helper.assertTrue(text.contains("NO  fill"), "a pad whose fill a torch blocks is not reported:\n" + text);
+            helper.assertFalse(text.startsWith("This spot is buildable."), "a pad whose fill a torch blocks is accepted:\n" + text);
+
+            Optional<PlotPlanner.Site> planned = PlotPlanner.findSite(helper.getLevel(), village, blueprint.size(), true, pos -> true, noSkip);
+            helper.assertTrue(planned.isEmpty(), "the planner offered " + planned.map(site -> site.origin().toShortString()).orElse("nothing")
+                    + " despite the torch, but the diagnosis called a pad there buildable");
+        } finally {
+            VillageTestSupport.remove(helper, village);
+        }
+        helper.succeed();
+    }
+
+    /**
+     * A pad in the slice straight ahead of a street's only end would cap the street for good ({@link PlotPlanner#slicesAhead}),
+     * so the real search never offers it. {@code explain} must say so too, not call the spot buildable.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_why_ahead")
+    public static void whyReportsAPadInTheSliceAheadOfAStreetEnd(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 8, false);
+        try {
+            // Laid from x=38 down to x=10: every cell but the last grew a later neighbour, so x=10 is the graph's only
+            // end, and its slice ahead (away from the parent at x=11) is x=9, z 29..31.
+            for (int x = 38; x >= 10; x--) {
+                village.addStreetCell(helper.absolutePos(new BlockPos(x, 1, 30)), 2);
+            }
+            Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+            BlockPos center = helper.absolutePos(new BlockPos(8, 1, 26));
+            PlotRules.LotSkip noSkip = (x, z) -> false;
+
+            String text = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), noSkip));
+            helper.assertTrue(text.contains("NO  ahead"), "a pad in the slice ahead of a street end is not reported:\n" + text);
+            helper.assertFalse(text.startsWith("This spot is buildable."), "a pad in the slice ahead of a street end is accepted:\n" + text);
+
+            int expectedOriginX = center.getX() - blueprint.size().getX() / 2;
+            int expectedOriginZ = center.getZ() - blueprint.size().getZ() / 2;
+            Optional<PlotPlanner.Site> planned = PlotPlanner.findSite(helper.getLevel(), village, blueprint.size(), false, pos -> true, noSkip);
+            helper.assertTrue(planned.stream().noneMatch(site -> site.origin().getX() == expectedOriginX && site.origin().getZ() == expectedOriginZ),
+                    "the planner offered the origin the diagnosis called buildable: " + planned);
         } finally {
             VillageTestSupport.remove(helper, village);
         }

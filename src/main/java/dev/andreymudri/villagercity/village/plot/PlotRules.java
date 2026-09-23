@@ -11,8 +11,19 @@ public final class PlotRules {
     public static final int MARGIN = 1;
     /** Fewest open columns between a house's footprint and another house's or plot's, along x or along z. */
     public static final int HOUSE_GAP = 5;
-    /** One pad in this many is left empty, so a village has gaps like a vanilla one. */
+    /** One lot in this many is left empty, so a village has gaps like a vanilla one. */
     public static final int SKIP_ONE_IN = 8;
+    /**
+     * Columns along each side of a lot, the square cells of a grid laid on the world from x 0, z 0: one 5 by 5 house and
+     * the {@link #HOUSE_GAP} beside it, so a lot left empty is a gap about the size of a missing house.
+     */
+    public static final int LOT_SIZE = 10;
+
+    /** Which lots are left empty, by lot coordinates ({@link #lotOf}); {@link #skippedLot} in a real village. */
+    @FunctionalInterface
+    public interface LotSkip {
+        boolean skipped(int lotX, int lotZ);
+    }
 
     private PlotRules() {
     }
@@ -65,9 +76,31 @@ public final class PlotRules {
         return paver ? volume <= Earthwork.MAX_VOLUME && columnStep <= Earthwork.MAX_COLUMN_STEP : volume == 0;
     }
 
-    /** Whether the pad at this origin is one of those left empty: a hash of the origin, so it never changes. */
-    public static boolean skipped(BlockPos origin) {
-        return Math.floorMod(Mth.murmurHash3Mixer(Long.hashCode(Mth.getSeed(origin))), SKIP_ONE_IN) == 0;
+    /** The lot coordinate of a column's x or z. */
+    public static int lotOf(int column) {
+        return Math.floorDiv(column, LOT_SIZE);
+    }
+
+    /** Whether this lot is one of those left empty: a hash of its coordinates, so it never changes. */
+    public static boolean skippedLot(int lotX, int lotZ) {
+        return Math.floorMod(Mth.murmurHash3Mixer(Long.hashCode(Mth.getSeed(lotX, 0, lotZ))), SKIP_ONE_IN) == 0;
+    }
+
+    /** Whether the lot holding this column ({@link #lotOf}) is left empty. */
+    public static boolean skipped(BlockPos column) {
+        return skippedLot(lotOf(column.getX()), lotOf(column.getZ()));
+    }
+
+    /** Whether any column of the footprint lies in a lot {@code skip} leaves empty. */
+    public static boolean coversSkippedLot(Footprint footprint, LotSkip skip) {
+        for (int lotX = lotOf(footprint.minX()); lotX <= lotOf(footprint.maxX()); lotX++) {
+            for (int lotZ = lotOf(footprint.minZ()); lotZ <= lotOf(footprint.maxZ()); lotZ++) {
+                if (skip.skipped(lotX, lotZ)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /** Horizontal offsets ring by ring (Chebyshev distance), center first; within a ring ordered by dz then dx. */

@@ -26,6 +26,14 @@ public final class PlotDiagnostics {
 
     /** Human-readable lines about {@code footprint} for {@code village}, the first line being the verdict. */
     public static List<String> explain(ServerLevel level, VillageData village, BlockPos center, Vec3i size) {
+        return explain(level, village, center, size, PlotRules::skippedLot);
+    }
+
+    /**
+     * As {@link #explain(ServerLevel, VillageData, BlockPos, Vec3i)}, with {@code skip} deciding which lots are left
+     * empty instead of {@link PlotRules#skippedLot}, whose answer depends on where in the world the pad lies.
+     */
+    public static List<String> explain(ServerLevel level, VillageData village, BlockPos center, Vec3i size, PlotRules.LotSkip skip) {
         List<String> lines = new ArrayList<>();
         BlockPos bell = village.center();
         boolean paver = village.jobCount(JobType.PAVER) > 0;
@@ -65,6 +73,10 @@ public final class PlotDiagnostics {
                 int away = Math.max(Math.abs(nearest.pos().getX() - center.getX()), Math.abs(nearest.pos().getZ() - center.getZ()));
                 lines.add("NO  street: the spot touches no street; the nearest street cell is " + away + " blocks away, "
                         + nearest.hops() + " hops out");
+                ok = false;
+            }
+            if (PlotRules.overlapsAny(footprint, PlotPlanner.slicesAhead(village))) {
+                lines.add("NO  ahead: this footprint lies in the slice straight ahead of a street end, where the next run would start");
                 ok = false;
             }
         }
@@ -126,9 +138,12 @@ public final class PlotDiagnostics {
                         + " blocks off the floor, the limit is " + Earthwork.MAX_COLUMN_STEP);
             }
             ok &= floor.accepted();
-            BlockPos origin = new BlockPos(minX, floor.y(), minZ);
-            if (!touching.isEmpty() && PlotRules.skipped(origin)) {
-                lines.add("NO  skipped: one pad in " + PlotRules.SKIP_ONE_IN + " beside a street is left empty, and this is one");
+            if (floor.accepted() && PlotPlanner.fillObstructed(level, area, floor.y(), Earthwork.MAX_COLUMN_STEP)) {
+                lines.add("NO  fill: something the paver may not clear, such as a torch, stands where the fill would go");
+                ok = false;
+            }
+            if (!touching.isEmpty() && PlotRules.coversSkippedLot(footprint, skip)) {
+                lines.add("NO  skipped: one lot in " + PlotRules.SKIP_ONE_IN + " beside a street is left empty, and this footprint covers one");
                 ok = false;
             }
         }

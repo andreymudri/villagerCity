@@ -189,6 +189,34 @@ public final class VillageRegistryTests {
         helper.succeed();
     }
 
+    /**
+     * A cell laid after another, right beside it, but with FEWER hops is a branch back toward the bell, not a
+     * continuation of that cell's run: it must not grow the earlier cell out of {@link VillageData#streetEnds()}.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void aLowerHopNeighbourDoesNotGrowTheEndItStandsBeside(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        BlockPos deepEnd = helper.absolutePos(new BlockPos(27, 2, 24));
+        village.addStreetCell(deepEnd, 2);
+        BlockPos shallowNeighbour = helper.absolutePos(new BlockPos(26, 2, 24));
+        village.addStreetCell(shallowNeighbour, 1);
+        helper.assertTrue(village.streetEnds().stream().anyMatch(cell -> cell.pos().equals(deepEnd)),
+                "a lower-hop neighbour grew the end at " + deepEnd + ": " + village.streetEnds());
+        helper.succeed();
+    }
+
+    /** A cell already in the graph keeps the hop count it was first recorded with, and is never added a second time. */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void addStreetCellIgnoresARepeatOfAnAlreadyKnownCell(GameTestHelper helper) {
+        VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(BELL), 12);
+        BlockPos pos = helper.absolutePos(new BlockPos(26, 2, 24));
+        village.addStreetCell(pos, 1);
+        village.addStreetCell(pos, 5);
+        helper.assertTrue(village.streets().size() == 1, "a repeated cell was added twice: " + village.streets());
+        helper.assertTrue(village.streets().get(0).hops() == 1, "a repeat overwrote the first hop count: " + village.streets());
+        helper.succeed();
+    }
+
     @GameTest(template = GameTestSupport.TEST_AREA)
     public static void aSaveWithoutStreetsLoadsWithAnEmptyGraph(GameTestHelper helper) {
         VillageData village = villageWithThreeStreetCells(helper);
