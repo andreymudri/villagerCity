@@ -146,6 +146,7 @@ issues describe what is left.
 **Files:**
 - Modify: `README.md`
 - Modify: `src/main/java/dev/andreymudri/villagercity/command/PlotDiagnostics.java`
+- Modify: `src/main/java/dev/andreymudri/villagercity/village/plot/PlotPlanner.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/VillageCommandTests.java`
 - Test: `src/main/java/dev/andreymudri/villagercity/gametest/ArtisanTests.java`
 
@@ -163,3 +164,6 @@ issues describe what is left.
 - [ ] **Step 3:** `VillageDemand`'s no-plot branch (it sums what every builder carries) has no test. Add one to
       `ArtisanTests`: a roster builder carrying the starter house's planks, no plot and an empty storehouse must
       produce no plank order. Dropping that subtraction must fail it.
+- [ ] **Step 4:** `/villagercity why` reports every rule the planner's house search applies, including the slice
+      straight ahead of a street end and the fill obstruction. It reuses `PlotPlanner`'s own helpers, exposing them
+      where needed, and never copies them.
