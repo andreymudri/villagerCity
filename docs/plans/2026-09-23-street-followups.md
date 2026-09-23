@@ -145,11 +145,21 @@ issues describe what is left.
 
 **Files:**
 - Modify: `README.md`
+- Modify: `src/main/java/dev/andreymudri/villagercity/command/PlotDiagnostics.java`
+- Test: `src/main/java/dev/andreymudri/villagercity/gametest/VillageCommandTests.java`
+- Test: `src/main/java/dev/andreymudri/villagercity/gametest/ArtisanTests.java`
 
 **Depends:** T1, T2, T3, T4
 
-**Model:** cheap
+**Model:** mid
 
 - [ ] **Step 1:** Update the README's known issues and the street-first section to match what T1-T4 actually
       changed. Remove the lines about the single-cell street and about the artisan re-ordering what the builder
       carries, but only where the tasks fixed them. Describe the new skip rule.
+- [ ] **Step 2:** `command/PlotDiagnostics.java` still calls `PlotRules.skipped(padOrigin)` and says "one pad in 8".
+      T2 moved the skip to whole lots (`PlotRules.coversSkippedLot`, `LOT_SIZE`). Report a pad as skipped when its
+      footprint covers a skipped lot, word it as lots, and keep `VillageCommandTests` green. A test that depends on
+      where the structure is placed is not allowed.
+- [ ] **Step 3:** `VillageDemand`'s no-plot branch (it sums what every builder carries) has no test. Add one to
+      `ArtisanTests`: a roster builder carrying the starter house's planks, no plot and an empty storehouse must
+      produce no plank order. Dropping that subtraction must fail it.
