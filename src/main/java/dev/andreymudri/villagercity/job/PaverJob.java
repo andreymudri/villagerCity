@@ -3,6 +3,7 @@ package dev.andreymudri.villagercity.job;
 import dev.andreymudri.villagercity.citizen.Job;
 import dev.andreymudri.villagercity.citizen.Task;
 import dev.andreymudri.villagercity.citizen.TaskContext;
+import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
@@ -50,5 +51,10 @@ public final class PaverJob implements Job {
     @Override
     public @Nullable String waitingFor() {
         return waitingFor;
+    }
+
+    /** The columns this paver's street work gave up on ({@link StreetWork#refused}); never saved. */
+    public Set<Long> refusedColumns() {
+        return streets.refused();
     }
 }

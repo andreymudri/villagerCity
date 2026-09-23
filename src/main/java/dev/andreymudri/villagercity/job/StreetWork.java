@@ -10,6 +10,7 @@ import dev.andreymudri.villagercity.village.VillageRegistry;
 import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
 import dev.andreymudri.villagercity.village.plot.PlotRules;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -34,7 +35,8 @@ import net.minecraft.tags.FluidTags;
  * covers with its footprint or its {@link PlotRules#MARGIN}, the ground the paver levels when it prepares the plot.
  *
  * <p>The run being laid, and the cells this job gave up on after {@link PathWork#MAX_CONSECUTIVE_FAILURES} failed
- * tasks, are held only in memory: a fresh job starts a new run from whichever end the graph now has.
+ * tasks, are held only in memory: a fresh job starts a new run from whichever end the graph now has. The builder reads
+ * those refusals ({@link #refused()}) to tell whether the paver can still start a street at all.
  */
 public final class StreetWork implements Job {
     /** Most centre cells one run lays. */
@@ -75,6 +77,14 @@ public final class StreetWork implements Job {
     @Override
     public @Nullable String waitingFor() {
         return waitingFor;
+    }
+
+    /**
+     * The columns, packed with {@code BlockPos.asLong(x, 0, z)}, this job gave up building on: a read-only view, for
+     * {@link #nextRun(ServerLevel, VillageData, Set)}. Never saved, so it is empty again after a reload.
+     */
+    public Set<Long> refused() {
+        return Collections.unmodifiableSet(refused);
     }
 
     @Override
@@ -183,7 +193,8 @@ public final class StreetWork implements Job {
         return nextRun(level, village, Set.of());
     }
 
-    private static Optional<Run> nextRun(ServerLevel level, VillageData village, Set<Long> refused) {
+    /** {@link #nextRun(ServerLevel, VillageData)} as a paver sees it that gave up on the {@code refused} columns. */
+    public static Optional<Run> nextRun(ServerLevel level, VillageData village, Set<Long> refused) {
         List<StreetCell> streets = village.streets();
         BlockPos bell = village.center();
         List<StreetCell> ends = new ArrayList<>(village.streetEnds().stream().filter(end -> end.hops() < MAX_HOPS).toList());

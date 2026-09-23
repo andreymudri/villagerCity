@@ -16,9 +16,12 @@ import dev.andreymudri.villagercity.village.VillageWorks.StreetCell;
 import dev.andreymudri.villagercity.village.plot.PlotPlanner;
 import dev.andreymudri.villagercity.village.plot.PlotRules;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestAssertException;
@@ -27,6 +30,8 @@ import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.entity.living.LivingDestroyBlockEvent;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
@@ -42,6 +47,16 @@ public final class StreetGrowthTests {
     private static final int RISE = 20;
     /** How far the plateau of {@link #aBellAtACliffEdgeStartsItsStreetLevelWithIt} stands above the ground beside it. */
     private static final int CLIFF = 6;
+    /** Absolute positions a protection mod would guard; the listener below cancels destroys there. */
+    private static final Set<BlockPos> PROTECTED_BREAK = ConcurrentHashMap.newKeySet();
+
+    static {
+        NeoForge.EVENT_BUS.addListener((LivingDestroyBlockEvent e) -> {
+            if (PROTECTED_BREAK.contains(e.getPos())) {
+                e.setCanceled(true);
+            }
+        });
+    }
 
     /**
      * A paver running {@link PaverJob}, also put on the village's roster: enrolling alone does not add it to an unmanaged
@@ -144,6 +159,35 @@ public final class StreetGrowthTests {
                     + ", plots " + village.plots().size());
             helper.assertTrue(village.streets().isEmpty(), "a street left the walled bell: " + village.streets());
             helper.assertTrue("room to grow".equals(waitingFor(paver)), "the paver is waiting for " + waitingFor(paver));
+            VillageTestSupport.remove(helper, village);
+        });
+    }
+
+    /**
+     * Short grass stands on the first centre cell of every direction from the bell, and a protection mod cancels its
+     * break, so the paver gives up on all four after {@code PathWork.MAX_CONSECUTIVE_FAILURES} failed tasks each and
+     * waits for room to grow. The builder must see those refusals and build without a street, not wait for one.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_street_growth_refused_bell", timeoutTicks = 8000)
+    public static void aBellWhoseEveryFirstSliceThePaverGaveUpOnStillGetsAPlot(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        List<BlockPos> guarded = Direction.Plane.HORIZONTAL.stream().map(direction -> helper.absolutePos(BELL.relative(direction))).toList();
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            helper.setBlock(BELL.relative(direction), Blocks.SHORT_GRASS);
+        }
+        PROTECTED_BREAK.addAll(guarded);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        BuilderTests.stockedStorehouse(helper, village, blueprint, 1);
+        Villager paver = enrollPaver(helper, village, 28, 1, 28);
+        Villager builder = enrollBuilder(helper, village, 22, 1, 28);
+        // Protection stays for every retry; it is lifted only once every assertion has passed.
+        helper.succeedWhen(() -> {
+            helper.assertTrue(village.streets().isEmpty(), "a street left the guarded bell: " + village.streets());
+            helper.assertTrue("room to grow".equals(waitingFor(paver)), "the paver is waiting for " + waitingFor(paver));
+            helper.assertTrue(!village.plots().isEmpty() || village.houseCount() > 0,
+                    "the builder claimed no plot; it is waiting for " + waitingFor(builder));
+            PROTECTED_BREAK.removeAll(guarded);
             VillageTestSupport.remove(helper, village);
         });
     }
