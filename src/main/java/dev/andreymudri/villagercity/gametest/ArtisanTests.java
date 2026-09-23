@@ -80,6 +80,11 @@ public final class ArtisanTests {
      * as a prepared one held by a builder that is not in the test, so the artisan sees exactly that shortfall.
      */
     private static void plotShortOf(GameTestHelper helper, VillageData village, Blueprint blueprint, Block... missing) {
+        plotShortOf(helper, village, blueprint, UUID.randomUUID(), missing);
+    }
+
+    /** As {@link #plotShortOf}, but held by {@code builder} instead of a UUID not in the test. */
+    private static void plotShortOf(GameTestHelper helper, VillageData village, Blueprint blueprint, UUID builder, Block... missing) {
         ServerLevel level = helper.getLevel();
         BlockPos origin = helper.absolutePos(PLOT);
         List<Block> skipped = List.of(missing);
@@ -89,7 +94,7 @@ public final class ArtisanTests {
             }
             level.setBlock(origin.offset(placement.offset()), placement.state(), Block.UPDATE_CLIENTS);
         }
-        village.addPlot(new Plot(UUID.randomUUID(), blueprint.id().toString(), origin, blueprint.size(), UUID.randomUUID()));
+        village.addPlot(new Plot(UUID.randomUUID(), blueprint.id().toString(), origin, blueprint.size(), builder));
     }
 
     /**
@@ -689,6 +694,97 @@ public final class ArtisanTests {
         helper.assertFalse(taken.equals(table), "the crafting table was set inside the villager at " + relative(helper, taken));
         helper.assertBlockNotPresent(Blocks.CRAFTING_TABLE, relative(helper, taken));
         helper.assertTrue(bystander.getY() <= stoodAt, "the villager was shoved up to " + bystander.getY() + " from " + stoodAt);
+        helper.succeed();
+    }
+
+    /**
+     * Sticks need two planks, one per slot in the recipe's own shape ({@code minecraft:stick} is shaped {@code "#",
+     * "#"}, both any plank): {@link ArtisanJob#pay}, which prices a step from real stock one ingredient slot at a
+     * time, must charge for both identical slots, not just one, or it would think a single plank pays for a recipe
+     * that needs two. With only one plank in stock and no logs to make more, no stick, and no torch that would need
+     * one, is ever crafted, and the lone plank is never spent on a recipe the village cannot pay for in full.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_scarce_stick_planks", timeoutTicks = 800)
+    public static void oneStickSlotSharesNoPlankWithTheOther(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_PLANKS, 1, Items.COAL, 4));
+        village.setCitizen(UUID.randomUUID(), JobType.LAMPLIGHTER);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        AtomicLong lowestPlanks = new AtomicLong(Long.MAX_VALUE);
+        helper.onEachTick(() -> lowestPlanks.updateAndGet(seen -> Math.min(seen, storehouse.count(Items.OAK_PLANKS))));
+        helper.runAfterDelay(600, () -> {
+            long sticks = storehouse.count(Items.STICK);
+            long torches = storehouse.count(Items.TORCH);
+            long planks = lowestPlanks.get();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(sticks == 0, "a single plank made " + sticks + " sticks out of a recipe that needs two,"
+                    + " waiting for " + job.waitingFor() + ", orders " + village.artisanOrders());
+            helper.assertTrue(torches == 0, "a stick nobody made lit " + torches + " torches anyway");
+            helper.assertTrue(planks == 1, "the lone plank was spent on a recipe it cannot pay for in full: " + planks + " left");
+            helper.succeed();
+        });
+    }
+
+    /**
+     * A builder already carrying a house's planks is not a reason to order more of them: {@link VillageDemand} must
+     * count what the village's builders carry the same way it counts storehouse stock.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_carried_planks")
+    public static void ordersDoNotAskAgainForPlanksTheBuilderAlreadyCarries(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of());
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        int neededPlanks = blueprint.requiredMaterials().getOrDefault(Items.OAK_PLANKS, 0);
+        helper.assertTrue(neededPlanks > 0, "the starter house needs no planks; this test needs one that does");
+
+        Villager builder = GameTestSupport.spawnVillager(helper, 22, 1, 22);
+        village.setCitizen(builder.getUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, builder.getUUID(), Blocks.OAK_PLANKS);
+        for (int left = neededPlanks; left > 0; left -= 64) {
+            builder.getInventory().addItem(new ItemStack(Items.OAK_PLANKS, Math.min(left, 64)));
+        }
+
+        VillageDemand.Demand demand = VillageDemand.of(helper.getLevel(), village, storehouse);
+        VillageTestSupport.remove(helper, village);
+        boolean ordersPlanks = demand.orders().stream().anyMatch(order -> order.getKey() == Items.OAK_PLANKS);
+        helper.assertFalse(ordersPlanks, "the village ordered " + neededPlanks
+                + " planks the builder is already carrying: " + demand.orders());
+        helper.succeed();
+    }
+
+    /**
+     * {@link VillageDemand#builderNeeds} only ever looks at the first plot, so only the builder holding THAT plot's
+     * planks may cancel its order: a second builder, carrying the same planks but working nothing of plot 0's, must
+     * not hide plot 0's own shortfall.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_other_builders_planks_do_not_hide_plot_0")
+    public static void aDifferentBuildersPlanksDoNotHidePlotZerosShortfall(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of());
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        int neededPlanks = blueprint.requiredMaterials().getOrDefault(Items.OAK_PLANKS, 0);
+        helper.assertTrue(neededPlanks > 0, "the starter house needs no planks; this test needs one that does");
+
+        Villager plotZeroBuilder = GameTestSupport.spawnVillager(helper, 22, 1, 22);
+        village.setCitizen(plotZeroBuilder.getUUID(), JobType.BUILDER);
+        plotShortOf(helper, village, blueprint, plotZeroBuilder.getUUID(), Blocks.OAK_PLANKS);
+
+        // A second builder, on the roster but holding no plot here and carrying the very planks plot 0 is short of.
+        Villager otherBuilder = GameTestSupport.spawnVillager(helper, 26, 1, 26);
+        village.setCitizen(otherBuilder.getUUID(), JobType.BUILDER);
+        for (int left = neededPlanks; left > 0; left -= 64) {
+            otherBuilder.getInventory().addItem(new ItemStack(Items.OAK_PLANKS, Math.min(left, 64)));
+        }
+
+        VillageDemand.Demand demand = VillageDemand.of(helper.getLevel(), village, storehouse);
+        VillageTestSupport.remove(helper, village);
+        boolean ordersPlanks = demand.orders().stream().anyMatch(order -> order.getKey() == Items.OAK_PLANKS);
+        helper.assertTrue(ordersPlanks, "a different builder's planks hid plot 0's own shortfall: " + demand.orders());
         helper.succeed();
     }
 
