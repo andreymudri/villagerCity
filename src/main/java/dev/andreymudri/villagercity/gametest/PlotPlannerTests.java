@@ -7,8 +7,12 @@ import dev.andreymudri.villagercity.village.Footprint;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.plot.PlotPlanner;
 import dev.andreymudri.villagercity.village.plot.PlotRules;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.LongSupplier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Vec3i;
 import net.minecraft.gametest.framework.GameTest;
@@ -22,6 +26,10 @@ import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 @PrefixGameTestTemplate(false)
 public final class PlotPlannerTests {
     private static final Vec3i HOUSE = new Vec3i(5, 5, 5);
+    /** No lot is left empty: these tests are about other rules, and {@link PlotRules#skippedLot} varies with where they run. */
+    private static final PlotRules.LotSkip NO_LOT_SKIPPED = (lotX, lotZ) -> false;
+    /** Most passes over its columns a failed search may cost ({@link #aFailedSearchOfALargeVillageIsCheap}). */
+    private static final long MAX_FAILED_SEARCH_PASSES = 8;
 
     /**
      * Test-relative position. Not {@code helper.relativePos}: in 1.21.1 it rotates by
@@ -140,6 +148,11 @@ public final class PlotPlannerTests {
         helper.succeed();
     }
 
+    /**
+     * A failed search of a large village costs a few passes over the columns within its reach, each sampled once
+     * ({@link PlotPlanner#sample}). It is timed against such a pass, measured in the same runs, in the CPU time of the
+     * server thread rather than by the clock, so time the thread spends waiting for a busy machine counts for neither.
+     */
     @GameTest(template = GameTestSupport.TEST_AREA)
     public static void aFailedSearchOfALargeVillageIsCheap(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
@@ -151,16 +164,31 @@ public final class PlotPlannerTests {
             }
         }
         VillageData village = new VillageData(UUID.randomUUID(), helper.absolutePos(new BlockPos(24, 1, 24)), 160);
-        long best = Long.MAX_VALUE;
+        BlockPos center = village.center();
+        int reach = PlotPlanner.searchReach(village);
+        int window = PlotPlanner.verticalReach(village.radius());
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        LongSupplier clock = threads.isCurrentThreadCpuTimeSupported() ? threads::getCurrentThreadCpuTime : System::nanoTime;
+        long search = Long.MAX_VALUE;
+        long pass = Long.MAX_VALUE;
+        long ground = 0;
         boolean found = false;
         for (int run = 0; run < 5; run++) {
-            long started = System.nanoTime();
+            long started = clock.getAsLong();
             // Every buildable spot is refused, so the whole reach is searched, as when nothing is buildable.
             found |= PlotPlanner.find(helper.getLevel(), village, HOUSE, origin -> false).isPresent();
-            best = Math.min(best, System.nanoTime() - started);
+            search = Math.min(search, clock.getAsLong() - started);
+            started = clock.getAsLong();
+            for (int x = center.getX() - reach; x <= center.getX() + reach; x++) {
+                for (int z = center.getZ() - reach; z <= center.getZ() + reach; z++) {
+                    ground += PlotPlanner.sample(helper.getLevel(), x, z, center.getY(), window).groundY();
+                }
+            }
+            pass = Math.min(pass, clock.getAsLong() - started);
         }
         helper.assertTrue(!found, "a refused spot was returned");
-        helper.assertTrue(best < 12_000_000L, "a failed search took " + best / 1000 + " us");
+        helper.assertTrue(search < MAX_FAILED_SEARCH_PASSES * pass, "a failed search took " + search / 1000 + " us, "
+                + String.format("%.1f", (double) search / pass) + " times one pass over its columns (" + pass / 1000 + " us, ground sum " + ground + ")");
         helper.succeed();
     }
 
@@ -213,9 +241,63 @@ public final class PlotPlannerTests {
             village.addPathCell(helper.absolutePos(new BlockPos(23, 1, z)));
             village.addPathCell(helper.absolutePos(new BlockPos(25, 1, z)));
         }
-        Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true);
+        Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, NO_LOT_SKIPPED);
         helper.assertTrue(site.isEmpty(), "a pad at " + site.map(found -> relative(helper, found.origin()).toShortString()).orElse("")
                 + " lies across the slice ahead of the street end");
+        helper.succeed();
+    }
+
+    /**
+     * A village at the bell (24, 1, 24) whose street is the single cell {@code cell}, on natural ground only in the patch
+     * x {@code fromX}..{@code toX}, z {@code fromZ}..{@code toZ}, cobblestone everywhere else; the pad the search finds.
+     */
+    private static Optional<PlotPlanner.Site> oneCellStreetPad(GameTestHelper helper, BlockPos cell, int fromX, int toX, int fromZ, int toZ) {
+        GameTestSupport.prepareArea(helper);
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if (x < fromX || x > toX || z < fromZ || z > toZ) {
+                    helper.setBlock(x, 0, z, Blocks.COBBLESTONE);
+                }
+            }
+        }
+        VillageData village = village(helper);
+        village.addStreetCell(helper.absolutePos(cell), 1);
+        return PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, NO_LOT_SKIPPED);
+    }
+
+    /**
+     * A street of a single cell grew from no cell, so the slice kept clear ahead of it lies on from the bell through it,
+     * along the axis on which it lies farther from the bell, or along both when it lies as far along each. In every
+     * layout the only natural ground is a patch where each pad touching the cell covers that slice: (24, 16), eight
+     * blocks north of the bell, keeps (23 to 25, 15) clear; (32, 22), eight east and two north, keeps (33, 21 to 23)
+     * clear; and (32, 16), eight each way, keeps both (31 to 33, 15) and (33, 15 to 17) clear, the patch north of it
+     * covering only the first and the patch east of it only the second.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void noPadCapsAOneCellStreet(GameTestHelper helper) {
+        record Layout(String name, BlockPos cell, int fromX, int toX, int fromZ, int toZ) {
+        }
+        List<Layout> layouts = List.of(
+                new Layout("north", new BlockPos(24, 1, 16), 18, 30, 8, 15),
+                new Layout("east", new BlockPos(32, 1, 22), 33, 40, 17, 27),
+                new Layout("level, north patch", new BlockPos(32, 1, 16), 26, 38, 8, 15),
+                new Layout("level, east patch", new BlockPos(32, 1, 16), 33, 40, 16, 22));
+        for (Layout layout : layouts) {
+            Optional<PlotPlanner.Site> site = oneCellStreetPad(helper, layout.cell(), layout.fromX(), layout.toX(), layout.fromZ(), layout.toZ());
+            helper.assertTrue(site.isEmpty(), "a pad at " + site.map(found -> relative(helper, found.origin()).toShortString()).orElse("")
+                    + " caps the one-cell street at " + layout.cell().toShortString() + " (" + layout.name() + ")");
+        }
+        helper.succeed();
+    }
+
+    /**
+     * As the north layout of {@link #noPadCapsAOneCellStreet}, but with the only natural ground east of the cell, x 25 to
+     * 31, z 16 to 22: the one pad there, (26, 1, 17), keeps off the slice and is found.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA)
+    public static void aPadBesideAOneCellStreetIsStillFound(GameTestHelper helper) {
+        Optional<BlockPos> origin = oneCellStreetPad(helper, new BlockPos(24, 1, 16), 25, 31, 16, 22).map(found -> relative(helper, found.origin()));
+        helper.assertTrue(origin.filter(new BlockPos(26, 1, 17)::equals).isPresent(), "planned " + origin + " instead of 26, 1, 17");
         helper.succeed();
     }
 
@@ -229,7 +311,7 @@ public final class PlotPlannerTests {
             village.addPathCell(helper.absolutePos(new BlockPos(23, 1, z)));
             village.addPathCell(helper.absolutePos(new BlockPos(25, 1, z)));
         }
-        Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true);
+        Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, NO_LOT_SKIPPED);
         helper.assertTrue(site.isPresent(), "no pad beside the street");
         Footprint area = Footprint.of(site.get().origin(), HOUSE).inflate(PlotRules.MARGIN);
         helper.assertFalse(area.intersects(new Footprint(helper.absolutePos(new BlockPos(23, 1, 15)).getX(),
@@ -243,9 +325,8 @@ public final class PlotPlannerTests {
      * A street a block above flat ground, north from the bell, (24, 2, 23) to (24, 2, 16), with its side cells. The only
      * natural ground is the patch x 26 to 32, z 14 to 24 east of it, cobblestone everywhere else, so the pads that can
      * touch the street are the 5 by 5s at x 27, z 15 to 19, every column of which the paver has to fill one block up to
-     * the street's height. There are five so that the one-in-eight skip ({@link PlotRules#skipped}), which varies with
-     * where the test runs, leaves some. With {@code torch}, a torch stands at (29, 1, 20), where every one of their fills
-     * would go.
+     * the street's height. No lot is left empty ({@link #NO_LOT_SKIPPED}). With {@code torch}, a torch stands at
+     * (29, 1, 20), where every one of their fills would go.
      */
     private static Optional<PlotPlanner.Site> raisedStreetPad(GameTestHelper helper, boolean torch) {
         GameTestSupport.prepareArea(helper);
@@ -265,7 +346,7 @@ public final class PlotPlannerTests {
             village.addPathCell(helper.absolutePos(new BlockPos(23, 2, z)));
             village.addPathCell(helper.absolutePos(new BlockPos(25, 2, z)));
         }
-        return PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true);
+        return PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, NO_LOT_SKIPPED);
     }
 
     /** The pad of {@link #raisedStreetPad} is planned when nothing stands where its fill goes. */

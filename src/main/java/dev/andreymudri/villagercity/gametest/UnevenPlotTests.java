@@ -44,6 +44,8 @@ public final class UnevenPlotTests {
     private static final BlockPos BELL = new BlockPos(24, 1, 24);
     /** Where the tests put a plot the paver never manages to prepare. */
     private static final BlockPos STUCK = new BlockPos(8, 1, 8);
+    /** No lot is left empty: for tests about another rule, since {@link PlotRules#skippedLot} varies with where they run. */
+    private static final PlotRules.LotSkip NO_LOT_SKIPPED = (lotX, lotZ) -> false;
     /** Terrace heights by x modulo 8: every 7 columns in a row hold both a 0 and a 3, so no spot varies by less than 3. */
     private static final int[] TERRACE = {0, 1, 2, 3, 3, 2, 1, 0};
 
@@ -317,8 +319,8 @@ public final class UnevenPlotTests {
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, 4, false);
         // A paver on the roster, with no villager behind it, so nothing prepares the plot during the test.
         village.setCitizen(UUID.randomUUID(), JobType.PAVER);
-        // A builder in a village with a paver only builds beside a street: one street cell on the lowest terrace (x = 24).
-        village.addStreetCell(helper.absolutePos(new BlockPos(24, 1, 30)), 1);
+        // A builder in a village with a paver only builds beside a street: one street cell on the lowest terrace.
+        village.addStreetCell(helper.absolutePos(valleyCell(helper)), 1);
         Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
         StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, blueprint, 1);
         Map<Item, Long> stocked = storehouse.counts();
@@ -338,6 +340,29 @@ public final class UnevenPlotTests {
             helper.assertTrue("the paver to prepare the plot".equals(job.waitingFor()), "waiting for " + job.waitingFor());
             VillageTestSupport.remove(helper, village);
         });
+    }
+
+    /**
+     * A street cell on the lowest {@link #terraces}, x 16, 24 or 32, south of the bell and farther from it along z than
+     * along x. The pads on the bell's side of it that span the valley, footprints x {@code cell - 4} to {@code cell + 3},
+     * z {@code cell - 6} to {@code cell - 2}, keep off the slice a one-cell street keeps clear, which lies beyond it, and
+     * from z 32 off the bell. Of those cells, the first where the lot grid leaves one of those pads open: whether a lot
+     * is left empty ({@link PlotRules#skippedLot}) varies with where the test runs.
+     */
+    private static BlockPos valleyCell(GameTestHelper helper) {
+        for (int z = 32; z < GameTestSupport.AREA_SIZE - 1; z++) {
+            for (int x : new int[] {24, 16, 32}) {
+                if (Math.abs(x - BELL.getX()) >= z - BELL.getZ()) {
+                    continue;
+                }
+                for (int minX = x - 4; minX <= x - 1; minX++) {
+                    if (!PlotRules.coversSkippedLot(Footprint.of(helper.absolutePos(new BlockPos(minX, 1, z - 6)), HOUSE), PlotRules::skippedLot)) {
+                        return new BlockPos(x, 1, z);
+                    }
+                }
+            }
+        }
+        throw new GameTestAssertException("every pad across a valley covers a lot left empty");
     }
 
     /** Gives the village a stocked storehouse and a builder holding an unprepared plot at {@link #STUCK}. */
@@ -475,23 +500,13 @@ public final class UnevenPlotTests {
     }
 
     /**
-     * An x for {@link #onlySpot} whose pad, with its floor at {@code floorY}, is not one of those the street search
-     * skips. The skip hashes the absolute origin, which depends on where the test runs, so a fixed x would sometimes
-     * test the skip instead of the rule it is about.
+     * A village at {@link #BELL} with a single street cell right beside the {@link #onlySpot} pad at {@code minX}, on
+     * the side away from the bell. The slice kept clear ahead of a one-cell street lies on the line from the bell through
+     * the cell, so a cell between the bell and the pad would rule the pad out.
      */
-    private static int unskippedX(GameTestHelper helper, int floorY) {
-        for (int x = 10; x <= 24; x += PlotPlanner.STEP) {
-            if (!PlotRules.skipped(helper.absolutePos(new BlockPos(x, floorY, 10)))) {
-                return x;
-            }
-        }
-        throw new GameTestAssertException("every candidate pad is skipped");
-    }
-
-    /** A village at {@link #BELL} with a street cell on the far z side of the {@link #onlySpot} pad at {@code minX}. */
     private static VillageData streetBesideSpot(GameTestHelper helper, int minX, int streetY) {
         VillageData village = village(helper);
-        village.addStreetCell(helper.absolutePos(new BlockPos(minX + 2, streetY, 16)), 1);
+        village.addStreetCell(helper.absolutePos(new BlockPos(minX + 2, streetY, 8)), 1);
         return village;
     }
 
@@ -522,14 +537,14 @@ public final class UnevenPlotTests {
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_street_budget")
     public static void aStreetPadIsTakenWithinTheEarthBudgetAndRefusedPastIt(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
-        int minX = unskippedX(helper, 2);
+        int minX = 10;
         // The floor is the street's y2. Columns at y1 need one block of fill, columns at y4 two blocks cut: 49 + k blocks
         // for k columns at y4. The ground varies by 3, which the old one-block flatness rule refused.
         for (int[] pair : new int[][] {{41, 90}, {21, 70}}) {
             int high = pair[0];
             onlySpot(helper, minX, (x, z) -> (x - (minX - 1)) * 7 + (z - 9) < high ? 3 : 0);
             VillageData village = streetBesideSpot(helper, minX, 2);
-            Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true);
+            Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, NO_LOT_SKIPPED);
             if (pair[1] > Earthwork.MAX_VOLUME) {
                 helper.assertTrue(site.isEmpty(), "a pad needing " + pair[1] + " blocks of earthwork was planned: " + site.map(s -> relative(helper, s.origin())));
             } else {
@@ -545,13 +560,13 @@ public final class UnevenPlotTests {
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_street_column_step")
     public static void aStreetPadWithOneColumnSevenOffTheFloorIsRefused(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
-        int minX = unskippedX(helper, 1);
+        int minX = 10;
         int peakX = minX + 2;
         // Flat at the street's y1 except one column: 7 blocks up is refused, 6 blocks up is not, for about as little earth.
         for (int peak : new int[] {7, 6}) {
             onlySpot(helper, minX, (x, z) -> x == peakX && z == 12 ? peak : 0);
             VillageData village = streetBesideSpot(helper, minX, 1);
-            Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true);
+            Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, NO_LOT_SKIPPED);
             if (peak > Earthwork.MAX_COLUMN_STEP) {
                 helper.assertTrue(site.isEmpty(), "a pad with a column " + peak + " off the floor was planned: " + site.map(s -> relative(helper, s.origin())));
             } else {
@@ -579,17 +594,20 @@ public final class UnevenPlotTests {
     }
 
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_street_skip")
-    public static void theSkippedPadsAreTheSameEverySearch(GameTestHelper helper) {
-        // Pure: the skip is a hash of the origin, about one in eight.
+    public static void theSkippedLotsAreTheSameEverySearch(GameTestHelper helper) {
+        // Pure: the skip is a hash of the lot, about one lot in eight, and a column is skipped when its lot is.
         int skipped = 0;
-        for (int x = 0; x < 32; x++) {
-            for (int z = 0; z < 32; z++) {
-                BlockPos origin = new BlockPos(x * 3, 64, z * 5);
-                helper.assertTrue(PlotRules.skipped(origin) == PlotRules.skipped(new BlockPos(origin.getX(), origin.getY(), origin.getZ())), "skip changed for " + origin);
-                skipped += PlotRules.skipped(origin) ? 1 : 0;
+        for (int lotX = -16; lotX < 16; lotX++) {
+            for (int lotZ = -16; lotZ < 16; lotZ++) {
+                boolean lot = PlotRules.skippedLot(lotX, lotZ);
+                helper.assertTrue(lot == PlotRules.skippedLot(lotX, lotZ), "skip changed for lot " + lotX + ", " + lotZ);
+                BlockPos corner = new BlockPos(lotX * PlotRules.LOT_SIZE, 64, lotZ * PlotRules.LOT_SIZE);
+                helper.assertTrue(PlotRules.skipped(corner) == lot && PlotRules.skipped(corner.offset(PlotRules.LOT_SIZE - 1, 0, PlotRules.LOT_SIZE - 1)) == lot,
+                        "a column of lot " + lotX + ", " + lotZ + " disagrees with its lot");
+                skipped += lot ? 1 : 0;
             }
         }
-        helper.assertTrue(skipped >= 64 && skipped <= 192, skipped + " of 1024 pads skipped, not about one in " + PlotRules.SKIP_ONE_IN);
+        helper.assertTrue(skipped >= 64 && skipped <= 192, skipped + " of 1024 lots skipped, not about one in " + PlotRules.SKIP_ONE_IN);
 
         // In the world: a long street, and every pad beside it the search would offer, in the order it offers them.
         GameTestSupport.prepareArea(helper);
@@ -601,25 +619,97 @@ public final class UnevenPlotTests {
         List<BlockPos> second = new ArrayList<>();
         PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> !first.add(pos));
         PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> !second.add(pos));
-        helper.assertTrue(first.size() >= 16, "only " + first.size() + " pads beside the street; the test needs many");
+        helper.assertTrue(first.size() >= 8, "only " + first.size() + " pads beside the street; the test needs many");
         helper.assertTrue(first.equals(second), "the same search offered different pads:\n" + first + "\n" + second);
         for (BlockPos origin : first) {
-            helper.assertFalse(PlotRules.skipped(origin), "offered a skipped pad at " + relative(helper, origin));
+            helper.assertFalse(PlotRules.coversSkippedLot(Footprint.of(origin, HOUSE), PlotRules::skippedLot),
+                    "offered a pad at " + relative(helper, origin) + " over a skipped lot");
         }
+        helper.succeed();
+    }
+
+    /**
+     * The only natural ground is one pad beside a street, x {@code minX}..{@code minX + 4}, z 17..21, with {@code minX}
+     * chosen where the lot grid splits it, so its origin and its east columns lie in two lots. Leaving only the east lot
+     * empty rules the pad out: a skipped lot is one no footprint covers, not one no origin lies in.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_lot_straddle")
+    public static void aPadReachingIntoASkippedLotIsNotPlanned(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        int minX = 10;
+        while (PlotRules.lotOf(helper.absolutePos(new BlockPos(minX, 1, 17)).getX())
+                == PlotRules.lotOf(helper.absolutePos(new BlockPos(minX + HOUSE.getX() - 1, 1, 17)).getX())) {
+            minX++;
+        }
+        for (int x = 0; x < GameTestSupport.AREA_SIZE; x++) {
+            for (int z = 0; z < GameTestSupport.AREA_SIZE; z++) {
+                if (x < minX - 1 || x > minX + HOUSE.getX() || z < 16 || z > 22) {
+                    helper.setBlock(x, 0, z, Blocks.COBBLESTONE);
+                }
+            }
+        }
+        VillageData village = village(helper);
+        wideStreet(helper, village, 4, 44, BELL.getZ(), 1);
+        BlockPos pad = new BlockPos(minX, 1, 17);
+        Optional<BlockPos> open = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, NO_LOT_SKIPPED)
+                .map(s -> relative(helper, s.origin()));
+        helper.assertTrue(open.filter(pad::equals).isPresent(), "the only pad is not " + pad.toShortString() + " but " + open);
+        BlockPos east = helper.absolutePos(new BlockPos(minX + HOUSE.getX() - 1, 1, 17));
+        int lotX = PlotRules.lotOf(east.getX());
+        int lotZ = PlotRules.lotOf(east.getZ());
+        Optional<BlockPos> skipped = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, (x, z) -> x == lotX && z == lotZ)
+                .map(s -> relative(helper, s.origin()));
+        helper.assertTrue(skipped.isEmpty(), "planned " + skipped.map(BlockPos::toShortString).orElse("") + ", whose east columns lie in the lot left empty");
+        helper.succeed();
+    }
+
+    /**
+     * A 3-wide street through the bell, x 4 to 44, filled with houses one search at a time, one lot left empty. No house
+     * covers that lot, and once the street is full, the only pad a search that skips nothing still finds covers it: the
+     * skip leaves its own lot open and no other.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_lot_fill")
+    public static void aFullStreetLeavesOnlyItsSkippedLotOpen(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = village(helper);
+        wideStreet(helper, village, 4, 44, BELL.getZ(), 1);
+        BlockPos inLot = helper.absolutePos(new BlockPos(30, 1, 19));
+        int lotX = PlotRules.lotOf(inLot.getX());
+        int lotZ = PlotRules.lotOf(inLot.getZ());
+        PlotRules.LotSkip skip = (x, z) -> x == lotX && z == lotZ;
+        for (int built = 0; built < 40; built++) {
+            Optional<PlotPlanner.Site> site = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, skip);
+            if (site.isEmpty()) {
+                break;
+            }
+            village.addHouse(new BuildingRecord("minecraft:home", site.get().origin(), HOUSE));
+        }
+        List<String> houses = village.houses().stream().map(house -> relative(helper, house.origin()).toShortString()).toList();
+        helper.assertTrue(village.houseCount() >= 6, "only " + village.houseCount() + " houses along the street: " + houses);
+        for (BuildingRecord house : village.houses()) {
+            helper.assertFalse(PlotRules.coversSkippedLot(house.footprint(), skip), "the house at " + relative(helper, house.origin()).toShortString()
+                    + " covers the lot left empty, around 30, 19");
+        }
+        List<BlockPos> room = new ArrayList<>();
+        PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> !room.add(pos), NO_LOT_SKIPPED);
+        List<String> outside = room.stream().filter(origin -> !PlotRules.coversSkippedLot(Footprint.of(origin, HOUSE), skip))
+                .map(origin -> relative(helper, origin).toShortString()).toList();
+        helper.assertTrue(outside.isEmpty(), "the full street still has room for a house outside the lot left empty, at " + outside + "; houses " + houses);
         helper.succeed();
     }
 
     @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_uneven_house_gap")
     public static void housesStandAtLeastFiveColumnsApart(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
-        int minX = unskippedX(helper, 1);
+        int minX = 10;
         onlySpot(helper, minX, (x, z) -> 0);
         for (boolean streets : new boolean[] {false, true}) {
             for (int gap : new int[] {PlotRules.HOUSE_GAP - 1, PlotRules.HOUSE_GAP}) {
                 VillageData village = streets ? streetBesideSpot(helper, minX, 1) : village(helper);
                 // A house to the east of the pad with exactly `gap` open columns between the two footprints.
                 village.addHouse(new BuildingRecord("minecraft:home", helper.absolutePos(new BlockPos(minX + HOUSE.getX() + gap, 1, 10)), HOUSE));
-                Optional<BlockPos> origin = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true).map(s -> relative(helper, s.origin()));
+                Optional<BlockPos> origin = PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> true, NO_LOT_SKIPPED)
+                        .map(s -> relative(helper, s.origin()));
                 boolean expected = gap >= PlotRules.HOUSE_GAP;
                 helper.assertTrue(origin.filter(new BlockPos(minX, 1, 10)::equals).isPresent() == expected,
                         "with " + gap + " open columns to a house (streets " + streets + ") the search planned " + origin);
@@ -644,7 +734,7 @@ public final class UnevenPlotTests {
         // The first street starts at the bell, so its centre line lies on the bell's own row: an even offset of 0.
         wideStreet(helper, village, 26, 40, BELL.getZ(), 1);
         List<BlockPos> offered = new ArrayList<>();
-        PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> !offered.add(pos));
+        PlotPlanner.findSite(helper.getLevel(), village, HOUSE, true, pos -> !offered.add(pos), NO_LOT_SKIPPED);
         // Beside the street, not at its ends: the footprint plus margin stops right at a side cell, z 23 or z 25.
         long beside = offered.stream().map(pos -> relative(helper, pos))
                 .filter(pos -> (pos.getZ() == 17 || pos.getZ() == 27) && pos.getX() >= 26 && pos.getX() + HOUSE.getX() - 1 <= 40)

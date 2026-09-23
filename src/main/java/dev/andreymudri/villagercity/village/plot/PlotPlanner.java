@@ -62,7 +62,7 @@ public final class PlotPlanner {
      * Returns the origin (minimum corner, at the first free y above ground) of a spot for a building that is not a house,
      * such as the storehouse: natural ground with no fluid and no laid path, clear of whatever the village has built,
      * needing no earthwork, tried in {@link #candidates} order. The house rules ({@link PlotRules#HOUSE_GAP}, the street a
-     * house must touch, the skipped pads) do not apply, so a village packed with houses along its streets can still
+     * house must touch, the lots left empty) do not apply, so a village packed with houses along its streets can still
      * place one.
      */
     public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size) {
@@ -71,7 +71,7 @@ public final class PlotPlanner {
 
     /** As {@link #find(ServerLevel, VillageData, Vec3i)}, skipping buildable spots whose origin fails the predicate. */
     public static Optional<BlockPos> find(ServerLevel level, VillageData village, Vec3i size, Predicate<BlockPos> originAllowed) {
-        return search(level, village, size, false, false, originAllowed).map(Site::origin);
+        return search(level, village, size, false, false, originAllowed, PlotRules::skippedLot).map(Site::origin);
     }
 
     /**
@@ -84,18 +84,28 @@ public final class PlotPlanner {
      * A village with street cells only builds beside its streets: the pads tried are every one, at any block, whose
      * footprint plus margin touches a street ({@link #streetPads}, {@link #touchingStreets}), however far out the street
      * runs; its footprint plus margin keeps off the slice straight ahead of every street end ({@link #slicesAhead}), so
-     * no house stands where the next run from an end would start; its floor is that street cell's y; one pad in
-     * {@link PlotRules#SKIP_ONE_IN} is left empty ({@link PlotRules#skipped}); and the pads are tried fewest hops first,
-     * then least earthwork, then nearest the bell.
+     * no house stands where the next run from an end would start; its floor is that street cell's y; its footprint
+     * covers no lot left empty ({@link PlotRules#skippedLot}, one lot in {@link PlotRules#SKIP_ONE_IN}), so each such
+     * lot stays a gap in the street's row of houses; and the pads are tried fewest hops first, then least earthwork,
+     * then nearest the bell.
      * A village with no street cells tries the spots in {@link #candidates} order within {@link #searchReach}, as before
      * it had streets, and takes the first ({@link #floor}).
      */
     public static Optional<Site> findSite(ServerLevel level, VillageData village, Vec3i size, boolean allowEarthwork, Predicate<BlockPos> originAllowed) {
-        return search(level, village, size, allowEarthwork, true, originAllowed);
+        return findSite(level, village, size, allowEarthwork, originAllowed, PlotRules::skippedLot);
+    }
+
+    /**
+     * As {@link #findSite(ServerLevel, VillageData, Vec3i, boolean, Predicate)}, with {@code skip} deciding which lots
+     * are left empty instead of {@link PlotRules#skippedLot}, whose answer depends on where in the world the pads lie.
+     */
+    public static Optional<Site> findSite(ServerLevel level, VillageData village, Vec3i size, boolean allowEarthwork, Predicate<BlockPos> originAllowed,
+            PlotRules.LotSkip skip) {
+        return search(level, village, size, allowEarthwork, true, originAllowed, skip);
     }
 
     private static Optional<Site> search(ServerLevel level, VillageData village, Vec3i size, boolean allowEarthwork, boolean house,
-            Predicate<BlockPos> originAllowed) {
+            Predicate<BlockPos> originAllowed, PlotRules.LotSkip skip) {
         BlockPos center = village.center();
         int reach = searchReach(village);
         List<Footprint> occupied = village.occupiedFootprints();
@@ -124,6 +134,9 @@ public final class PlotPlanner {
             Footprint area = footprint.inflate(PlotRules.MARGIN);
             List<StreetCell> touching = List.of();
             if (onStreets) {
+                if (PlotRules.coversSkippedLot(footprint, skip)) {
+                    continue;
+                }
                 touching = touchingStreets(village, streets, area);
                 if (touching.isEmpty() || PlotRules.overlapsAny(footprint, ahead)) {
                     continue;
@@ -170,10 +183,8 @@ public final class PlotPlanner {
                 }
                 continue;
             }
-            if (!PlotRules.skipped(site.origin())) {
-                int ring = Math.max(Math.abs(minX + size.getX() / 2 - center.getX()), Math.abs(minZ + size.getZ() / 2 - center.getZ()));
-                ranked.add(new Ranked(site, floor.street().hops(), ring, i));
-            }
+            int ring = Math.max(Math.abs(minX + size.getX() / 2 - center.getX()), Math.abs(minZ + size.getZ() / 2 - center.getZ()));
+            ranked.add(new Ranked(site, floor.street().hops(), ring, i));
         }
         ranked.sort(Comparator.comparingInt(Ranked::hops)
                 .thenComparingInt(entry -> entry.site().earthwork())
@@ -360,15 +371,25 @@ public final class PlotPlanner {
      * The first slice a run from each street end would lay, three cells across, straight ahead of the end in the
      * direction from the cell it grew from (the latest cell recorded before it within one block). A pad whose footprint
      * plus margin covers one of these would cap the street for good, since a run only ever starts at an end. An end
-     * that grew from no recorded cell, such as a street of a single cell, has no direction and keeps nothing clear.
+     * that grew from no recorded cell, such as a street of a single cell, keeps clear the slice beyond it on from the
+     * bell: along the axis on which it lies farther from the bell, or along both when it lies as far along each.
      */
     private static List<Footprint> slicesAhead(VillageData village) {
         List<StreetCell> streets = village.streets();
+        BlockPos bell = village.center();
         List<Footprint> slices = new ArrayList<>();
         for (StreetCell end : village.streetEnds()) {
             BlockPos pos = end.pos();
             BlockPos parent = parentOf(streets, end);
             if (parent == null) {
+                int awayX = pos.getX() - bell.getX();
+                int awayZ = pos.getZ() - bell.getZ();
+                if (Math.abs(awayX) >= Math.abs(awayZ) && awayX != 0) {
+                    addSliceAhead(slices, pos, Integer.signum(awayX), 0);
+                }
+                if (Math.abs(awayZ) >= Math.abs(awayX) && awayZ != 0) {
+                    addSliceAhead(slices, pos, 0, Integer.signum(awayZ));
+                }
                 continue;
             }
             int dx = Integer.signum(pos.getX() - parent.getX());
@@ -377,12 +398,17 @@ public final class PlotPlanner {
                 // A diagonal step or none: no straight line ahead to keep clear.
                 continue;
             }
-            int x = pos.getX() + dx;
-            int z = pos.getZ() + dz;
-            // The slice runs across the street: along z for a street heading along x, and the other way round.
-            slices.add(new Footprint(x - Math.abs(dz), z - Math.abs(dx), x + Math.abs(dz), z + Math.abs(dx)));
+            addSliceAhead(slices, pos, dx, dz);
         }
         return slices;
+    }
+
+    /** Adds the slice one step from {@code end} along the unit step {@code dx}, {@code dz}, three cells across. */
+    private static void addSliceAhead(List<Footprint> slices, BlockPos end, int dx, int dz) {
+        int x = end.getX() + dx;
+        int z = end.getZ() + dz;
+        // The slice runs across the street: along z for a street heading along x, and the other way round.
+        slices.add(new Footprint(x - Math.abs(dz), z - Math.abs(dx), x + Math.abs(dz), z + Math.abs(dx)));
     }
 
     /** The latest street cell recorded before {@code end} within one block of it along x, y and z, or null. */
