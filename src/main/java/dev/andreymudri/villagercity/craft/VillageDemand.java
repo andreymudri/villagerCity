@@ -16,7 +16,9 @@ import java.util.Optional;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.entity.npc.Villager;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 /** What the village is short of, as orders for the artisan, plus the stock its other jobs have already been promised. */
@@ -38,6 +40,7 @@ public final class VillageDemand {
     /** The village's demand right now: the builder's outstanding materials, and torches while a lamplighter works. */
     public static Demand of(ServerLevel level, VillageData village, StorehouseBlockEntity storehouse) {
         Map<Item, Integer> needs = builderNeeds(level, village);
+        Map<Item, Integer> carried = carriedByBuilders(level, village);
         Map<Item, Integer> reserved = new LinkedHashMap<>();
         Map<Item, Integer> wanted = new LinkedHashMap<>();
         needs.forEach((item, amount) -> {
@@ -45,8 +48,11 @@ public final class VillageDemand {
             if (held > 0) {
                 reserved.put(item, held);
             }
-            if (amount > held) {
-                wanted.put(item, amount - held);
+            // A builder already carrying part of the order needs no more of it ordered: what it carries is not
+            // storehouse stock, so it is not reserved, but it still counts against the shortfall.
+            int stillWanted = amount - held - carried.getOrDefault(item, 0);
+            if (stillWanted > 0) {
+                wanted.put(item, stillWanted);
             }
         });
         if (village.jobCount(JobType.LAMPLIGHTER) > 0) {
@@ -93,5 +99,25 @@ public final class VillageDemand {
             return Blueprints.load(level, Blueprints.STARTER_HOUSE).map(Blueprint::requiredMaterials).orElse(Map.of());
         }
         return Map.of();
+    }
+
+    /**
+     * What the village's builders are carrying right now, summed across every loaded builder's inventory. A builder
+     * not currently loaded is counted as carrying nothing.
+     */
+    private static Map<Item, Integer> carriedByBuilders(ServerLevel level, VillageData village) {
+        Map<Item, Integer> carried = new LinkedHashMap<>();
+        village.citizens().forEach((citizen, job) -> {
+            if (job != JobType.BUILDER || !(level.getEntity(citizen) instanceof Villager builder)) {
+                return;
+            }
+            for (int slot = 0; slot < builder.getInventory().getContainerSize(); slot++) {
+                ItemStack stack = builder.getInventory().getItem(slot);
+                if (!stack.isEmpty()) {
+                    carried.merge(stack.getItem(), stack.getCount(), Integer::sum);
+                }
+            }
+        });
+        return carried;
     }
 }

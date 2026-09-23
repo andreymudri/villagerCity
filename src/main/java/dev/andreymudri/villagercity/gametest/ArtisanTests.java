@@ -693,6 +693,65 @@ public final class ArtisanTests {
     }
 
     /**
+     * Sticks need two planks, one per slot in the recipe's own shape ({@code minecraft:stick} is shaped {@code "#",
+     * "#"}, both any plank): {@link ArtisanJob#pay}, which prices a step from real stock one ingredient slot at a
+     * time, must charge for both identical slots, not just one, or it would think a single plank pays for a recipe
+     * that needs two. With only one plank in stock and no logs to make more, no stick, and no torch that would need
+     * one, is ever crafted, and the lone plank is never spent on a recipe the village cannot pay for in full.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_scarce_stick_planks", timeoutTicks = 800)
+    public static void oneStickSlotSharesNoPlankWithTheOther(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of(Items.OAK_PLANKS, 1, Items.COAL, 4));
+        village.setCitizen(UUID.randomUUID(), JobType.LAMPLIGHTER);
+        WorkshopService.ensureWorkshop(helper.getLevel(), village);
+        ArtisanJob job = artisan(helper, village, 22, 22);
+
+        AtomicLong lowestPlanks = new AtomicLong(Long.MAX_VALUE);
+        helper.onEachTick(() -> lowestPlanks.updateAndGet(seen -> Math.min(seen, storehouse.count(Items.OAK_PLANKS))));
+        helper.runAfterDelay(600, () -> {
+            long sticks = storehouse.count(Items.STICK);
+            long torches = storehouse.count(Items.TORCH);
+            long planks = lowestPlanks.get();
+            VillageTestSupport.remove(helper, village);
+            helper.assertTrue(sticks == 0, "a single plank made " + sticks + " sticks out of a recipe that needs two,"
+                    + " waiting for " + job.waitingFor() + ", orders " + village.artisanOrders());
+            helper.assertTrue(torches == 0, "a stick nobody made lit " + torches + " torches anyway");
+            helper.assertTrue(planks == 1, "the lone plank was spent on a recipe it cannot pay for in full: " + planks + " left");
+            helper.succeed();
+        });
+    }
+
+    /**
+     * A builder already carrying a house's planks is not a reason to order more of them: {@link VillageDemand} must
+     * count what the village's builders carry the same way it counts storehouse stock.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_carried_planks")
+    public static void ordersDoNotAskAgainForPlanksTheBuilderAlreadyCarries(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of());
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        int neededPlanks = blueprint.requiredMaterials().getOrDefault(Items.OAK_PLANKS, 0);
+        helper.assertTrue(neededPlanks > 0, "the starter house needs no planks; this test needs one that does");
+        plotShortOf(helper, village, blueprint, Blocks.OAK_PLANKS);
+
+        Villager builder = GameTestSupport.spawnVillager(helper, 22, 1, 22);
+        village.setCitizen(builder.getUUID(), JobType.BUILDER);
+        for (int left = neededPlanks; left > 0; left -= 64) {
+            builder.getInventory().addItem(new ItemStack(Items.OAK_PLANKS, Math.min(left, 64)));
+        }
+
+        VillageDemand.Demand demand = VillageDemand.of(helper.getLevel(), village, storehouse);
+        VillageTestSupport.remove(helper, village);
+        boolean ordersPlanks = demand.orders().stream().anyMatch(order -> order.getKey() == Items.OAK_PLANKS);
+        helper.assertFalse(ordersPlanks, "the village ordered " + neededPlanks
+                + " planks the builder is already carrying: " + demand.orders());
+        helper.succeed();
+    }
+
+    /**
      * A trip that failed left the artisan holding stock and its eight slots full. It has to put that back before
      * planning anything, or every withdrawal from now on overflows the inventory and nothing is ever crafted again.
      */
