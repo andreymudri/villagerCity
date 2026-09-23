@@ -385,7 +385,7 @@ public final class PlotPlanner {
      * that grew from no recorded cell, such as a street of a single cell, keeps clear the slice beyond it on from the
      * bell: along the axis on which it lies farther from the bell, or along both when it lies as far along each.
      */
-    private static List<Footprint> slicesAhead(VillageData village) {
+    public static List<Footprint> slicesAhead(VillageData village) {
         List<StreetCell> streets = village.streets();
         BlockPos bell = village.center();
         List<Footprint> slices = new ArrayList<>();

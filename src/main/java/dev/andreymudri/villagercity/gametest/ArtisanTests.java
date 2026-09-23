@@ -789,6 +789,36 @@ public final class ArtisanTests {
     }
 
     /**
+     * Before the builder holds any plot, {@link VillageDemand#builderNeeds} orders a whole starter house's worth of
+     * materials. With no plot to pin a single builder's stock to, {@link VillageDemand#of} must sum what every
+     * roster builder carries ({@link VillageDemand} calls it {@code carriedByAnyBuilder}), or a builder already
+     * carrying the house's planks would still see them ordered again.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_artisan_no_plot_carried_planks")
+    public static void ordersDoNotAskAgainForPlanksARosterBuilderCarriesWithNoPlot(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, BELL, RADIUS, false);
+        StorehouseBlockEntity storehouse = BuilderTests.stockedStorehouse(helper, village, Map.of());
+        Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+        int neededPlanks = blueprint.requiredMaterials().getOrDefault(Items.OAK_PLANKS, 0);
+        helper.assertTrue(neededPlanks > 0, "the starter house needs no planks; this test needs one that does");
+
+        Villager builder = GameTestSupport.spawnVillager(helper, 22, 1, 22);
+        village.setCitizen(builder.getUUID(), JobType.BUILDER);
+        for (int left = neededPlanks; left > 0; left -= 64) {
+            builder.getInventory().addItem(new ItemStack(Items.OAK_PLANKS, Math.min(left, 64)));
+        }
+        helper.assertTrue(village.plots().isEmpty(), "this test needs no plot claimed yet");
+
+        VillageDemand.Demand demand = VillageDemand.of(helper.getLevel(), village, storehouse);
+        VillageTestSupport.remove(helper, village);
+        boolean ordersPlanks = demand.orders().stream().anyMatch(order -> order.getKey() == Items.OAK_PLANKS);
+        helper.assertFalse(ordersPlanks, "the village ordered " + neededPlanks
+                + " planks a roster builder already carries, with no plot to pin it to: " + demand.orders());
+        helper.succeed();
+    }
+
+    /**
      * A trip that failed left the artisan holding stock and its eight slots full. It has to put that back before
      * planning anything, or every withdrawal from now on overflows the inventory and nothing is ever crafted again.
      */
