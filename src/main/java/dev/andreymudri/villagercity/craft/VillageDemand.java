@@ -13,6 +13,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
+import javax.annotation.Nullable;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -40,7 +42,10 @@ public final class VillageDemand {
     /** The village's demand right now: the builder's outstanding materials, and torches while a lamplighter works. */
     public static Demand of(ServerLevel level, VillageData village, StorehouseBlockEntity storehouse) {
         Map<Item, Integer> needs = builderNeeds(level, village);
-        Map<Item, Integer> carried = carriedByBuilders(level, village);
+        // builderNeeds looks only at the first plot, so only the builder holding THAT plot may cancel its order: a
+        // second builder carrying the same items but working something else (or nothing) must not hide the shortfall.
+        List<Plot> plots = village.plots();
+        Map<Item, Integer> carried = plots.isEmpty() ? carriedByAnyBuilder(level, village) : carriedBy(level, plots.get(0).builder());
         Map<Item, Integer> reserved = new LinkedHashMap<>();
         Map<Item, Integer> wanted = new LinkedHashMap<>();
         needs.forEach((item, amount) -> {
@@ -101,23 +106,38 @@ public final class VillageDemand {
         return Map.of();
     }
 
+    /** What {@code builder} is carrying right now, or nothing when it is null or not currently loaded. */
+    private static Map<Item, Integer> carriedBy(ServerLevel level, @Nullable UUID builder) {
+        if (builder == null || !(level.getEntity(builder) instanceof Villager villager)) {
+            return Map.of();
+        }
+        return carriedBy(villager);
+    }
+
     /**
-     * What the village's builders are carrying right now, summed across every loaded builder's inventory. A builder
-     * not currently loaded is counted as carrying nothing.
+     * What any of the village's builders are carrying right now, summed across every loaded builder's inventory. Used
+     * only while the village has no plot yet, so no builder is working one whose stock the others could shadow.
      */
-    private static Map<Item, Integer> carriedByBuilders(ServerLevel level, VillageData village) {
+    private static Map<Item, Integer> carriedByAnyBuilder(ServerLevel level, VillageData village) {
         Map<Item, Integer> carried = new LinkedHashMap<>();
         village.citizens().forEach((citizen, job) -> {
             if (job != JobType.BUILDER || !(level.getEntity(citizen) instanceof Villager builder)) {
                 return;
             }
-            for (int slot = 0; slot < builder.getInventory().getContainerSize(); slot++) {
-                ItemStack stack = builder.getInventory().getItem(slot);
-                if (!stack.isEmpty()) {
-                    carried.merge(stack.getItem(), stack.getCount(), Integer::sum);
-                }
-            }
+            carriedBy(builder).forEach((item, count) -> carried.merge(item, count, Integer::sum));
         });
+        return carried;
+    }
+
+    /** What a single villager's inventory holds, item by item. */
+    private static Map<Item, Integer> carriedBy(Villager villager) {
+        Map<Item, Integer> carried = new LinkedHashMap<>();
+        for (int slot = 0; slot < villager.getInventory().getContainerSize(); slot++) {
+            ItemStack stack = villager.getInventory().getItem(slot);
+            if (!stack.isEmpty()) {
+                carried.merge(stack.getItem(), stack.getCount(), Integer::sum);
+            }
+        }
         return carried;
     }
 }
