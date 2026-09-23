@@ -91,11 +91,13 @@ bell:
   and at most **6** hops, one hop being one run. Six runs of eight cells can climb 48 blocks.
 - **Houses go beside streets:** a pad's footprint plus its one-block margin must touch a street, and the house floor
   is that street's height. The paver levels the pad if it needs at most **80** blocks of cut plus fill and no column
-  more than **6** off the floor. Houses and plots keep at least **5** open columns between them, and **one pad in
-  eight** is left empty, so the village has gaps. A pad never covers, even with its margin, the three cells straight
-  ahead of a street end, where the next run from that end starts, so a house does not cap a street. A pad is not
-  taken when something the paver may not clear, such as a torch, stands where its fill would go. Pads on fewer hops
-  come first, then those needing less earthwork, then those nearer the bell.
+  more than **6** off the floor. Houses and plots keep at least **5** open columns between them. The world is
+  divided into **10×10** lots from x0, z0, and **one lot in eight** stays empty beside a street: no pad may cover
+  it, so the village has gaps about the size of a missing house. A pad never covers, even with its margin, the three
+  cells straight ahead of a street end, where the next run from that end starts; a street of a single cell keeps
+  that slice clear too, measured away from the bell, so a house does not cap a street. A pad is not taken when
+  something the paver may not clear, such as a torch, stands where its fill would go. Pads on fewer hops come
+  first, then those needing less earthwork, then those nearer the bell.
 - **When nothing can grow,** every street end blocked or at its limits, the paver reports `waiting for room to grow`.
 - A village with **no paver** keeps the old rule: flat plots near the bell, and no streets.
 
@@ -184,11 +186,9 @@ into `~/.minecraft/mods/`.
 - The village does not smelt. Glass and charcoal must come from a player.
 - The artisan crafts only for the builder and the lamplighter. It uses shaped and shapeless crafting-table
   recipes only, never a smithing table, stonecutter or loom, and never a recipe that leaves a bucket or bottle.
-- The artisan can order again materials the builder is already carrying, and turn spare logs into planks nobody
-  needs.
+- The artisan can turn spare logs into planks nobody needs.
 - Streets have no junctions or crossings: each run is a straight line from a street end, so a street whose ends
-  are all blocked stops growing for good. Pads keep off the cells straight ahead of a street end, but a street of a
-  single cell has no direction yet, so a house beside it can still block its continuation.
+  are all blocked stops growing for good.
 - Houses do not face the street; the door is always on the same side of the blueprint.
 - The paver builds no retaining walls or stair blocks, and the lamplighter lights no caves or building interiors.
 - The starter house needs oak specifically; villages among birch or spruce need the player to bring oak.

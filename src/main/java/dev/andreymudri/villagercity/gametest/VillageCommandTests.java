@@ -16,6 +16,7 @@ import dev.andreymudri.villagercity.village.Plot;
 import dev.andreymudri.villagercity.village.VillageData;
 import dev.andreymudri.villagercity.village.plot.Earthwork;
 import dev.andreymudri.villagercity.village.plot.PlotPlanner;
+import dev.andreymudri.villagercity.village.plot.PlotRules;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -119,6 +120,43 @@ public final class VillageCommandTests {
             helper.assertTrue(beside.contains("(the street's height, 2 hops out)"), "the street beside the spot is not reported:\n" + beside);
             helper.assertTrue(away.contains("NO  street: the spot touches no street; the nearest street cell is 18 blocks away, 2 hops out"),
                     "a spot away from the street was not turned down for it:\n" + away);
+        } finally {
+            VillageTestSupport.remove(helper, village);
+        }
+        helper.succeed();
+    }
+
+    /**
+     * The lot the pad's own footprint lies in is forced skipped and, separately, forced not skipped; the real hash
+     * ({@link PlotRules#skippedLot}) never runs, so the outcome does not depend on where the framework places the
+     * structure.
+     */
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_command_why_skip")
+    public static void whyReportsAPadOverALotTheSkipLeavesEmpty(GameTestHelper helper) {
+        GameTestSupport.prepareArea(helper);
+        VillageData village = VillageTestSupport.freshVillage(helper, new BlockPos(24, 1, 24), 8, false);
+        try {
+            Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
+            for (int x = 10; x <= 38; x++) {
+                village.addStreetCell(helper.absolutePos(new BlockPos(x, 1, 30)), 2);
+            }
+            // Same spot as whyReportsTheStreetASpotOpensOnto: centre (16, 26), footprint z 24..28, beside the street.
+            BlockPos center = helper.absolutePos(new BlockPos(16, 1, 26));
+            int padMinX = center.getX() - blueprint.size().getX() / 2;
+            int padMinZ = center.getZ() - blueprint.size().getZ() / 2;
+            int lotX = PlotRules.lotOf(padMinX);
+            int lotZ = PlotRules.lotOf(padMinZ);
+            PlotRules.LotSkip forcedSkip = (x, z) -> x == lotX && z == lotZ;
+            PlotRules.LotSkip noSkip = (x, z) -> false;
+
+            String skipped = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), forcedSkip));
+            String open = String.join("\n", PlotDiagnostics.explain(helper.getLevel(), village, center, blueprint.size(), noSkip));
+
+            helper.assertTrue(skipped.contains("NO  skipped: one lot in " + PlotRules.SKIP_ONE_IN + " beside a street is left empty, and this footprint covers one"),
+                    "a pad over a lot the skip leaves empty is not reported skipped:\n" + skipped);
+            helper.assertFalse(skipped.startsWith("This spot is buildable."), "a pad over a lot the skip leaves empty is accepted:\n" + skipped);
+            helper.assertTrue(open.startsWith("This spot is buildable."), "the same pad is rejected when no lot is left empty:\n" + open);
+            helper.assertFalse(open.contains("skipped"), "a pad over no lot the skip leaves empty is reported skipped:\n" + open);
         } finally {
             VillageTestSupport.remove(helper, village);
         }
