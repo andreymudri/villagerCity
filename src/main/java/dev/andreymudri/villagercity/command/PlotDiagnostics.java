@@ -15,10 +15,12 @@ import net.minecraft.core.Vec3i;
 import net.minecraft.server.level.ServerLevel;
 
 /**
- * Explains, for one spot, why the plot search would take it or turn it down. Every rule it reports is the same one
- * {@link PlotPlanner#findSite} applies, through the same methods, with a paver's earth budget exactly when the village
- * has a paver, as the builder searches; {@code VillageCommandTests} pins the two to the same verdict, so a change to
- * the planner that this misses fails that test rather than quietly lying to whoever asked.
+ * Explains, for one spot, why the plot search would take it or turn it down. Every rule it reports, but one, is the
+ * same one {@link PlotPlanner#findSite} applies, through the same methods, with a paver's earth budget exactly when
+ * the village has a paver, as the builder searches; {@code VillageCommandTests} pins the two to the same verdict, so
+ * a change to the planner that this misses fails that test rather than quietly lying to whoever asked. The one rule
+ * missing is the slice straight ahead of a street end ({@link PlotPlanner}'s own {@code slicesAhead}, private to it):
+ * a pad there can still be called buildable here while the real search would never offer it.
  */
 public final class PlotDiagnostics {
     private PlotDiagnostics() {
@@ -134,6 +136,10 @@ public final class PlotDiagnostics {
                         + " blocks off the floor, the limit is " + Earthwork.MAX_COLUMN_STEP);
             }
             ok &= floor.accepted();
+            if (floor.accepted() && PlotPlanner.fillObstructed(level, area, floor.y(), Earthwork.MAX_COLUMN_STEP)) {
+                lines.add("NO  fill: something the paver may not clear, such as a torch, stands where the fill would go");
+                ok = false;
+            }
             if (!touching.isEmpty() && PlotRules.coversSkippedLot(footprint, skip)) {
                 lines.add("NO  skipped: one lot in " + PlotRules.SKIP_ONE_IN + " beside a street is left empty, and this footprint covers one");
                 ok = false;
