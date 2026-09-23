@@ -7,6 +7,7 @@ import dev.andreymudri.villagercity.blueprint.Blueprints;
 import dev.andreymudri.villagercity.citizen.CitizenAttachments;
 import dev.andreymudri.villagercity.citizen.CitizenData;
 import dev.andreymudri.villagercity.citizen.JobType;
+import dev.andreymudri.villagercity.command.VillageCommand;
 import dev.andreymudri.villagercity.job.BuilderJob;
 import dev.andreymudri.villagercity.storehouse.StorehouseBlockEntity;
 import dev.andreymudri.villagercity.storehouse.StorehouseContent;
@@ -44,8 +45,19 @@ public final class EndToEndTests {
         }
     }
 
-    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_e2e_village", timeoutTicks = 12000)
+    private static final int GATHERED_WOOD_TIMEOUT = 12000;
+
+    @GameTest(template = GameTestSupport.TEST_AREA, batch = "vc_e2e_village", timeoutTicks = GATHERED_WOOD_TIMEOUT)
     public static void villageBuildsHouseFromGatheredWood(GameTestHelper helper) {
+        gatheredWoodScenario(helper);
+    }
+
+    /**
+     * Two unhired villagers, three trees and a storehouse stocked with all but logs: the village hires, fells, and
+     * builds its first house. If it has not by the last ticks, the failure carries the village report, so a rare
+     * failure says what each citizen was doing instead of only "houses 0".
+     */
+    static void gatheredWoodScenario(GameTestHelper helper) {
         GameTestSupport.prepareArea(helper);
         VillageData village = VillageTestSupport.freshVillage(helper, BELL, 8, true);
         Blueprint blueprint = Blueprints.load(helper.getLevel(), Blueprints.STARTER_HOUSE).orElseThrow();
@@ -65,7 +77,11 @@ public final class EndToEndTests {
         });
         helper.succeedWhen(() -> {
             helper.assertTrue(stocked.get(), "storehouse never placed");
-            helper.assertTrue(village.houseCount() == 1, "houses " + village.houseCount() + ", plots " + village.plots().size());
+            if (village.houseCount() != 1) {
+                String report = helper.getTick() < GATHERED_WOOD_TIMEOUT - 2 ? ""
+                        : "\n" + String.join("\n", VillageCommand.describe(helper.getLevel(), village));
+                helper.fail("houses " + village.houseCount() + ", plots " + village.plots().size() + report);
+            }
             VillageTestSupport.remove(helper, village);
         });
     }
